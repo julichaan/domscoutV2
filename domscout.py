@@ -1,8 +1,11 @@
+#!/usr/bin/env python3
 import subprocess
 import sys
 import os
 import threading
 import time
+import argparse
+import concurrent.futures
 
 class ProgressLoader:
     def __init__(self, total_steps):
@@ -52,7 +55,7 @@ class ProgressLoader:
         self.desc = desc
         self.local_progress = 0.0
 
-    def finish(self, desc="Completado!"):
+    def finish(self, desc="Completed!"):
         self.current_step = self.total_steps + 1 # Force 100%
         self.desc = desc
         # Allow one render cycle to show 100%
@@ -85,11 +88,13 @@ def print_banner():
 
 def main():
     print_banner()
-    if len(sys.argv) != 2:
-        print("Uso: python3 subdomain_enum.py <target.com>")
-        sys.exit(1)
-
-    target = sys.argv[1]
+    
+    parser = argparse.ArgumentParser(description="DomScout - Subdomain Enumeration Tool")
+    parser.add_argument("target", help="Target domain (e.g., example.com)")
+    
+    args = parser.parse_args()
+    
+    target = args.target
     
     commands = [
         (f"subfinder -d {target} -all -silent -o subfinder-rescursive.txt", "subfinder"),
@@ -102,19 +107,26 @@ def main():
     total_steps = len(commands) + 3 
     current_step = 0
 
-    print(f"[*] Iniciando enumeración para: {target}")
+    print(f"[*] Starting enumeration for: {target}")
     
     loader = ProgressLoader(total_steps)
     loader.start()
-    loader.update(current_step, "Iniciando...")
+    loader.update(current_step, "Starting parallel enumeration...")
 
-    for cmd, desc in commands:
-        current_step += 1
-        loader.update(current_step, f"Ejecutando {desc}...")
-        run_command(cmd, desc)
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future_to_desc = {executor.submit(run_command, cmd, desc): desc for cmd, desc in commands}
+        
+        for future in concurrent.futures.as_completed(future_to_desc):
+            desc = future_to_desc[future]
+            current_step += 1
+            loader.update(current_step, f"Finished {desc}")
+            try:
+                future.result()
+            except Exception:
+                pass
 
     current_step += 1
-    loader.update(current_step, "Procesando resultados...")
+    loader.update(current_step, "Processing results...")
     
     filenames = ["subfinder-rescursive.txt", "findomain.txt", "assetfinder.txt", "sublist3r.txt", "crtsh.txt"]
     unique_subdomains = set()
@@ -134,31 +146,29 @@ def main():
         for subdomain in sorted(unique_subdomains):
             f.write(f"{subdomain}\n")
     
+    count = len(unique_subdomains)
+    print(f"[*] Found {count} unique subdomains. Saving to subdomains.txt...")
+
+    if count == 0:
+        loader.stop()
+        print("[!] No subdomains found. Exiting.")
+        sys.exit(0)
+
     current_step += 1
-    loader.update(current_step, "Ejecutando httpx (sudo)...")
+    loader.update(current_step, "Running httpx (sudo)...")
     
 
-    httpx_cmd = "cat subdomains.txt | sudo httpx > alive_subdomains.txt"
+    httpx_cmd = "cat subdomains.txt | sudo httpx > alive_webservices.txt"
     try:
         subprocess.run(httpx_cmd, shell=True, check=True)
     except subprocess.CalledProcessError:
         # Stop loader to print error cleanly
         loader.stop()
-        print("\n[!] Error ejecutando httpx. Asegúrate de tener permisos sudo o que httpx esté instalado.")
+        print("\n[!] Error running httpx. Ensure you have sudo permissions or that httpx is installed.")
         sys.exit(1)
 
     current_step += 1
-    loader.update(current_step, "Limpiando archivos...")
-    
-    files_to_remove = filenames + ["subdomains.txt"]
-    for filename in files_to_remove:
-        if os.path.exists(filename):
-            try:
-                os.remove(filename)
-            except OSError:
-                pass
-    
-    loader.update(total_steps, "Limpiando archivos...")
+    loader.update(current_step, "Cleaning up files...")
     
     files_to_remove = filenames + ["subdomains.txt"]
     for filename in files_to_remove:
@@ -170,7 +180,7 @@ def main():
     
     loader.finish()
     
-    print(f"\n[+] Proceso finalizado. Resultados guardados en 'alive_subdomains.txt'.")
+    print(f"\n[+] Process finished.\n    - Alive web services: 'alive_webservices.txt'")
 
 if __name__ == "__main__":
     main()

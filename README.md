@@ -8,7 +8,7 @@ DomScout is a Python-based subdomain enumeration tool for Bug Bounty that aggreg
 -   **Duplicate Removal**: Automatically merges and deduplicates results from all sources.
 -   **Live Subdomain Checking**: Uses `httpx` to verify which subdomains are alive.
 -   **Progress Tracking**: Displays a real-time progress bar during execution.
--   **Clean Output**: Generates a single file (`alive_subdomains.txt`) with the final results and cleans up temporary files.
+-   **Clean Output**: Generates a single file (`alive_webservices.txt`) with the final results and cleans up temporary files.
 
 ## Compatibility
 
@@ -97,16 +97,29 @@ To get the best results with `subfinder`, it is highly recommended to configure 
 
 ## Usage
 
-Run the script using Python 3, providing the target domain as an argument:
+Run the script using Python 3. You must provide the target domain.
 
 ```bash
-python3 domscout.py target.com
+python3 domscout.py <target>
 ```
+
+### Arguments
+
+-   `target`: The target domain to enumerate (e.g., `example.com`).
+-   `-h, --help`: Show the help message and exit.
 
 ### Example
 
 ```bash
 python3 domscout.py example.com
+```
+
+### Help
+
+To see all available options:
+
+```bash
+python3 domscout.py --help
 ```
 
 The tool will display a progress bar as it runs through the enumeration steps. Once finished, the live subdomains will be saved in `alive_subdomains.txt`.
