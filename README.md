@@ -8,8 +8,9 @@ DomScout is a Python-based subdomain enumeration tool for Bug Bounty that aggreg
 -   **Duplicate Removal**: Automatically merges and deduplicates results from all sources.
 -   **Live Subdomain Checking**: Uses `httpx` to verify which subdomains are alive.
 -   **Screenshot Capture**: Uses `gowitness` to take screenshots of all live web services.
+-   **Interactive Report**: Launches a local web server to browse screenshots and results comfortably.
 -   **Progress Tracking**: Displays a real-time progress bar during execution.
--   **Clean Output**: Generates a single file (`alive_subdomains.txt`) with the final results, a `screenshots` folder, and cleans up temporary files.
+-   **Clean Output**: Automatically cleans up all temporary files, screenshots, and databases upon completion or interruption.
 
 ## Compatibility
 
@@ -28,6 +29,7 @@ Before running DomScout, ensure you have the following tools installed and avail
 -   [Sublist3r](https://github.com/aboul3la/Sublist3r)
 -   [httpx](https://github.com/projectdiscovery/httpx)
 -   [gowitness](https://github.com/sensepost/gowitness)
+-   **Google Chrome** (Required for screenshots)
 -   `curl`
 -   `jq`
 
@@ -125,13 +127,17 @@ To see all available options:
 python3 domscout.py --help
 ```
 
-The tool will display a progress bar as it runs through the enumeration steps. Once finished, the live subdomains will be saved in `alive_subdomains.txt`.
+The tool will display a progress bar as it runs through the enumeration steps. Once finished, it will launch a **Report Server** where you can view the results.
 
-## Output
+## Output & Reporting
 
--   **live_subs.txt**: Contains the list of subdomains that successfully resolved via DNS.
--   **alive_webservices.txt**: Contains the list of live web services (HTTP/HTTPS) found by `httpx`.
--   **screenshots/**: Directory containing screenshots of the live web services taken by `gowitness`.
+Upon completion, DomScout launches a local `gowitness` report server:
+
+1.  **Access the Report**: Open your browser at `http://localhost:7171`.
+2.  **View Results**: Browse screenshots, response codes, and headers.
+3.  **Finish**: Press `Ctrl+C` in the terminal to stop the server.
+
+**Note**: To keep your workspace clean, DomScout **automatically deletes** the `screenshots/` folder and the database when you stop the server.
 
 ## Author
 
