@@ -1,9 +1,104 @@
-# domscout
-First recognition of wildcard for Bug Bounty. Input => wildcard, output => alive subdomains. Uses multiple tools
+# DomScout
 
-TODO:
-README
-	-Poner tools que utiliza
-	-Configuración de cada herramienta (si es necesario, solo subfinder)
-	-Como instalar
-	-Como ejecutar
+DomScout is a Python-based subdomain enumeration tool for Bug Bounty that aggregates results from multiple powerful tools to provide a comprehensive list of live subdomains for a given target.
+
+## Features
+
+-   **Multi-tool Aggregation**: Combines results from `subfinder`, `findomain`, `assetfinder`, `sublist3r`, and `crt.sh`.
+-   **Duplicate Removal**: Automatically merges and deduplicates results from all sources.
+-   **Live Subdomain Checking**: Uses `httpx` to verify which subdomains are alive.
+-   **Progress Tracking**: Displays a real-time progress bar during execution.
+-   **Clean Output**: Generates a single file (`alive_subdomains.txt`) with the final results and cleans up temporary files.
+
+## Prerequisites
+
+Before running DomScout, ensure you have the following tools installed and available in your system's PATH:
+
+-   [Python 3](https://www.python.org/)
+-   [Subfinder](https://github.com/projectdiscovery/subfinder)
+-   [Findomain](https://github.com/Findomain/Findomain)
+-   [Assetfinder](https://github.com/tomnomnom/assetfinder)
+-   [Sublist3r](https://github.com/aboul3la/Sublist3r)
+-   [httpx](https://github.com/projectdiscovery/httpx)
+-   `curl`
+-   `jq`
+
+### Installation
+
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/julichaan/domscout.git
+    cd domscout
+    ```
+
+2.  Install dependencies automatically using the provided script:
+    ```bash
+    python3 install.py
+    ```
+    
+    *Note: The installation script supports macOS (via Homebrew) and Linux (via apt/Go). If you are on another system or prefer manual installation, ensure all tools listed in Prerequisites are installed.*
+
+## Configuration
+
+### Subfinder API Configuration
+
+To get the best results with `subfinder`, it is highly recommended to configure API keys for various services.
+
+1.  Locate the default configuration file for `subfinder`. It is usually located at:
+    -   **Linux/macOS**: `$HOME/.config/subfinder/provider-config.yaml`
+    -   **Windows**: `%USERPROFILE%\.config\subfinder\provider-config.yaml`
+
+2.  Open the file in a text editor.
+
+3.  Add your API keys in the following format:
+
+    ```yaml
+    binaryedge:
+      - YOUR_BINARYEDGE_API_KEY
+    censys:
+      - YOUR_CENSYS_API_KEY
+    certspotter:
+      - YOUR_CERTSPOTTER_API_KEY
+    chaos:
+      - YOUR_CHAOS_API_KEY
+    dnsdb:
+      - YOUR_DNSDB_API_KEY
+    github:
+      - YOUR_GITHUB_TOKEN
+    intelx:
+      - YOUR_INTELX_API_KEY
+    passivetotal:
+      - YOUR_PASSIVETOTAL_USERNAME:YOUR_PASSIVETOTAL_KEY
+    securitytrails:
+      - YOUR_SECURITYTRAILS_API_KEY
+    shodan:
+      - YOUR_SHODAN_API_KEY
+    virustotal:
+      - YOUR_VIRUSTOTAL_API_KEY
+    ```
+
+    *Note: You don't need keys for all services, but adding them improves the number of subdomains found.*
+
+## Usage
+
+Run the script using Python 3, providing the target domain as an argument:
+
+```bash
+python3 domscout.py target.com
+```
+
+### Example
+
+```bash
+python3 domscout.py example.com
+```
+
+The tool will display a progress bar as it runs through the enumeration steps. Once finished, the live subdomains will be saved in `alive_subdomains.txt`.
+
+## Output
+
+-   **alive_subdomains.txt**: Contains the list of unique, live subdomains found for the target.
+
+## Author
+
+**julichaan**

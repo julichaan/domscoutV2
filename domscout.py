@@ -15,46 +15,49 @@ def print_progress(iteration, total, prefix='', suffix='', decimals=1, length=50
 
 def run_command(command, description):
     try:
-        # Ejecutamos el comando. Usamos shell=True para permitir pipes y redirecciones.
-        # Redirigimos stdout y stderr para mantener la barra de progreso limpia, 
-        # a menos que sea crítico ver el output.
         subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
-        # Si falla, no interrumpimos todo el script, pero notificamos (opcionalmente)
-        # print(f"\n[!] Error ejecutando {description}")
         pass
 
+def print_banner():
+    print(r"""
+  ____                  ____                   _       ,_,
+ |  _ \  ___  _ __ ___ / ___|  ___ ___  _   _| |_     (O,O)
+ | | | |/ _ \| '_ ` _ \\___ \ / __/ _ \| | | | __|    (   )
+ | |_| | (_) | | | | | |___) | (_| (_) | |_| | |_     -"-"-
+ |____/ \___/|_| |_| |_|____/ \___\___/ \__,_|\__|
+                                                  """)
+    print(" Author: julichaan")
+    print(" Version: 1.0")
+    print("-" * 50)
+
 def main():
+    print_banner()
     if len(sys.argv) != 2:
         print("Uso: python3 subdomain_enum.py <target.com>")
         sys.exit(1)
 
     target = sys.argv[1]
     
-    # Definimos los comandos a ejecutar
-    # Nota: Se asume que las herramientas están instaladas y en el PATH.
     commands = [
         (f"subfinder -d {target} -all -silent -o subfinder-rescursive.txt", "subfinder"),
-        (f"findomain --quiet -t {target} > findomain.txt", "findomain"), # Cambiado tee por > para evitar output en consola
-        (f"assetfinder -subs-only {target} > assetfinder.txt", "assetfinder"), # Cambiado tee por > para evitar output en consola
+        (f"findomain --quiet -t {target} > findomain.txt", "findomain"),
+        (f"assetfinder -subs-only {target} > assetfinder.txt", "assetfinder"),
         (f"sublist3r -d {target} -t 50 -o sublist3r.txt", "sublist3r"),
         (f'curl -s "https://crt.sh/?q=%25.{target}&output=json" | jq -r \'.[].name_value\' | sed \'s/\*\.//g\' > "crtsh.txt"', "crt.sh")
     ]
 
-    # Pasos: Comandos + Unificar + HTTPX + Limpieza
     total_steps = len(commands) + 3 
     current_step = 0
 
     print(f"[*] Iniciando enumeración para: {target}")
     print_progress(current_step, total_steps, prefix='Progreso:', suffix='Iniciando...', length=40)
 
-    # 1. Ejecutar herramientas de enumeración
     for cmd, desc in commands:
         current_step += 1
         print_progress(current_step, total_steps, prefix='Progreso:', suffix=f'Ejecutando {desc}' + ' '*10, length=40)
         run_command(cmd, desc)
 
-    # 2. Agrupar y eliminar duplicados
     current_step += 1
     print_progress(current_step, total_steps, prefix='Progreso:', suffix='Procesando resultados' + ' '*5, length=40)
     
@@ -76,21 +79,16 @@ def main():
         for subdomain in sorted(unique_subdomains):
             f.write(f"{subdomain}\n")
     
-    # 3. Comprobar dominios vivos con httpx
     current_step += 1
     print_progress(current_step, total_steps, prefix='Progreso:', suffix='Ejecutando httpx (sudo)' + ' '*5, length=40)
     
-    # Nota: sudo pedirá contraseña si no está configurado NOPASSWD.
-    # Para que el usuario pueda escribir la contraseña, no ocultamos stdout/stderr aquí si es interactivo,
-    # pero como queremos mantener la barra, es complicado. 
-    # Lo ejecutaremos normal, si pide pass, el usuario lo verá.
+
     httpx_cmd = "cat subdomains.txt | sudo httpx > alive_subdomains.txt"
     try:
         subprocess.run(httpx_cmd, shell=True, check=True)
     except subprocess.CalledProcessError:
         print("\n[!] Error ejecutando httpx. Asegúrate de tener permisos sudo o que httpx esté instalado.")
 
-    # 4. Limpieza de archivos temporales
     current_step += 1
     print_progress(current_step, total_steps, prefix='Progreso:', suffix='Limpiando archivos' + ' '*10, length=40)
     
