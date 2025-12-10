@@ -53,28 +53,38 @@ To get the best results with `subfinder`, it is highly recommended to configure 
 3.  Add your API keys in the following format:
 
     ```yaml
-    binaryedge:
-      - YOUR_BINARYEDGE_API_KEY
-    censys:
-      - YOUR_CENSYS_API_KEY
-    certspotter:
-      - YOUR_CERTSPOTTER_API_KEY
-    chaos:
-      - YOUR_CHAOS_API_KEY
-    dnsdb:
-      - YOUR_DNSDB_API_KEY
-    github:
-      - YOUR_GITHUB_TOKEN
-    intelx:
-      - YOUR_INTELX_API_KEY
-    passivetotal:
-      - YOUR_PASSIVETOTAL_USERNAME:YOUR_PASSIVETOTAL_KEY
-    securitytrails:
-      - YOUR_SECURITYTRAILS_API_KEY
-    shodan:
-      - YOUR_SHODAN_API_KEY
-    virustotal:
-      - YOUR_VIRUSTOTAL_API_KEY
+    bevigil: []
+	bufferover: []
+	builtwith: []
+	c99: []
+	censys: []
+	certspotter: []
+	chaos: []
+	chinaz: []
+	digitalyama: []
+	dnsdb: []
+	dnsdumpster: []
+	dnsrepo: []
+	driftnet: []
+	facebook: []
+	fofa: []
+	fullhunt: []
+	github: []
+	hunter: []
+	intelx: []
+	leakix: []
+	netlas: []
+	pugrecon: []
+	quake: []
+	redhuntlabs: []
+	robtex: []
+	rsecloud: []
+	securitytrails: []
+	shodan: []
+	threatbook: []
+	virustotal: []
+	whoisxmlapi: []
+	zoomeyeapi: []
     ```
 
     *Note: You don't need keys for all services, but adding them improves the number of subdomains found.*

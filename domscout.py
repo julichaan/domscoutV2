@@ -1,17 +1,69 @@
 import subprocess
 import sys
 import os
+import threading
+import time
 
-def print_progress(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█', printEnd="\r"):
-    """
-    Call in a loop to create terminal progress bar
-    """
-    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
-    filledLength = int(length * iteration // total)
-    bar = fill * filledLength + '-' * (length - filledLength)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end=printEnd)
-    if iteration == total: 
-        print()
+class ProgressLoader:
+    def __init__(self, total_steps):
+        self.total_steps = total_steps
+        self.current_step = 0
+        self.desc = ""
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.local_progress = 0.0
+
+    def _animate(self):
+        chars = "/-\|"
+        i = 0
+        while not self.stop_event.is_set():
+            time.sleep(0.1)
+            
+            if self.current_step > 0 and self.current_step <= self.total_steps:
+                if self.local_progress < 0.95:
+                    self.local_progress += (0.95 - self.local_progress) * 0.05
+                
+                base_percent = (self.current_step - 1) / self.total_steps
+                step_fraction = 1 / self.total_steps
+                current_total_fraction = base_percent + (self.local_progress * step_fraction)
+            elif self.current_step > self.total_steps:
+                current_total_fraction = 1.0
+            else:
+                current_total_fraction = 0.0
+
+            percent_val = current_total_fraction * 100
+            bar_len = 40
+            filled = int(bar_len * current_total_fraction)
+            bar = "█" * filled + "-" * (bar_len - filled)
+            
+            char = chars[i % len(chars)]
+            
+            sys.stdout.write(f"\r{char} [{bar}] {percent_val:.1f}% {self.desc}\033[K")
+            sys.stdout.flush()
+            i += 1
+
+    def start(self):
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._animate)
+        self.thread.start()
+
+    def update(self, step, desc):
+        self.current_step = step
+        self.desc = desc
+        self.local_progress = 0.0
+
+    def finish(self, desc="Completado!"):
+        self.current_step = self.total_steps + 1 # Force 100%
+        self.desc = desc
+        # Allow one render cycle to show 100%
+        time.sleep(0.2)
+        self.stop()
+
+    def stop(self):
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join()
+        sys.stdout.write("\n")
 
 def run_command(command, description):
     try:
@@ -51,15 +103,18 @@ def main():
     current_step = 0
 
     print(f"[*] Iniciando enumeración para: {target}")
-    print_progress(current_step, total_steps, prefix='Progreso:', suffix='Iniciando...', length=40)
+    
+    loader = ProgressLoader(total_steps)
+    loader.start()
+    loader.update(current_step, "Iniciando...")
 
     for cmd, desc in commands:
         current_step += 1
-        print_progress(current_step, total_steps, prefix='Progreso:', suffix=f'Ejecutando {desc}' + ' '*10, length=40)
+        loader.update(current_step, f"Ejecutando {desc}...")
         run_command(cmd, desc)
 
     current_step += 1
-    print_progress(current_step, total_steps, prefix='Progreso:', suffix='Procesando resultados' + ' '*5, length=40)
+    loader.update(current_step, "Procesando resultados...")
     
     filenames = ["subfinder-rescursive.txt", "findomain.txt", "assetfinder.txt", "sublist3r.txt", "crtsh.txt"]
     unique_subdomains = set()
@@ -80,17 +135,20 @@ def main():
             f.write(f"{subdomain}\n")
     
     current_step += 1
-    print_progress(current_step, total_steps, prefix='Progreso:', suffix='Ejecutando httpx (sudo)' + ' '*5, length=40)
+    loader.update(current_step, "Ejecutando httpx (sudo)...")
     
 
     httpx_cmd = "cat subdomains.txt | sudo httpx > alive_subdomains.txt"
     try:
         subprocess.run(httpx_cmd, shell=True, check=True)
     except subprocess.CalledProcessError:
+        # Stop loader to print error cleanly
+        loader.stop()
         print("\n[!] Error ejecutando httpx. Asegúrate de tener permisos sudo o que httpx esté instalado.")
+        sys.exit(1)
 
     current_step += 1
-    print_progress(current_step, total_steps, prefix='Progreso:', suffix='Limpiando archivos' + ' '*10, length=40)
+    loader.update(current_step, "Limpiando archivos...")
     
     files_to_remove = filenames + ["subdomains.txt"]
     for filename in files_to_remove:
@@ -100,8 +158,19 @@ def main():
             except OSError:
                 pass
     
-    print_progress(total_steps, total_steps, prefix='Progreso:', suffix='Completado!' + ' '*15, length=40)
-    print(f"\n\n[+] Proceso finalizado. Resultados guardados en 'alive_subdomains.txt'.")
+    loader.update(total_steps, "Limpiando archivos...")
+    
+    files_to_remove = filenames + ["subdomains.txt"]
+    for filename in files_to_remove:
+        if os.path.exists(filename):
+            try:
+                os.remove(filename)
+            except OSError:
+                pass
+    
+    loader.finish()
+    
+    print(f"\n[+] Proceso finalizado. Resultados guardados en 'alive_subdomains.txt'.")
 
 if __name__ == "__main__":
     main()
