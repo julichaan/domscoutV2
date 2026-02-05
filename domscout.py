@@ -272,7 +272,7 @@ def main():
         loader.update(current_step, "Running httpx (sudo)...")
         
 
-        httpx_cmd = f"cat live_subs.txt | sudo httpx -rl {rate_limit} > alive_webservices.txt"
+        httpx_cmd = f"cat live_subs.txt | httpx-toolkit -rl {rate_limit} > alive_webservices.txt"
         try:
             subprocess.run(httpx_cmd, shell=True, check=True)
         except subprocess.CalledProcessError:
