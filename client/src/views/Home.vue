@@ -33,18 +33,6 @@
           />
         </div>
 
-        <div class="form-group">
-          <label for="rateLimit">Rate Limit (requests/sec)</label>
-          <input
-            id="rateLimit"
-            v-model="rateLimit"
-            type="number"
-            class="input-field"
-            placeholder="150"
-            :disabled="isScanning"
-          />
-        </div>
-
         <button
           class="btn btn-primary btn-scan"
           @click="startScan"
@@ -110,7 +98,7 @@ export default {
   data() {
     return {
       domain: '',
-      rateLimit: 150,
+      rateLimit: 150,  // Fixed rate limit, not shown in UI
       isScanning: false,
       error: null,
       recentScans: []

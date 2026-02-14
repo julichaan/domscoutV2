@@ -1,0 +1,5 @@
+https://dev.inheritans.com:443
+https://www.inheritans.com:443
+https://inheritans.com:443
+https://api-dev.inheritans.com:443
+https://api.inheritans.com:443

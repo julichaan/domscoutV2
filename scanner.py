@@ -7,6 +7,40 @@ import shutil
 import platform
 import json
 import sqlite3
+import logging
+import sys
+
+
+# Configure logging to output to both console and a log file
+log_dir = os.path.expanduser("~/domscout_logs")
+os.makedirs(log_dir, exist_ok=True)
+
+def setup_logging(scan_id):
+    """Setup logging for a specific scan"""
+    log_file = os.path.join(log_dir, f"scan_{scan_id}.log")
+    
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # File handler
+    fh = logging.FileHandler(log_file)
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(formatter)
+    
+    # Console handler (for import into app.py logging)
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(formatter)
+    
+    # Create scanner logger
+    logger = logging.getLogger(f'scanner_{scan_id}')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    
+    return logger
 
 
 class DomScoutScanner:
@@ -17,9 +51,14 @@ class DomScoutScanner:
         self.resolvers_file = resolvers_file
         self.screenshots_dir = screenshots_dir
         
+        # Setup logging for this scan
+        self.logger = setup_logging(scan_id)
+        self.logger.info(f"=== SCAN STARTED for {target} ===")
+        
         # Create scan-specific directory
         self.scan_dir = os.path.join(os.path.dirname(screenshots_dir), f'scan_{scan_id}')
         os.makedirs(self.scan_dir, exist_ok=True)
+        self.logger.debug(f"Scan directory: {self.scan_dir}")
         
         # Results
         self.subdomains = []
@@ -28,7 +67,7 @@ class DomScoutScanner:
         self.screenshots = []
         
         # Progress tracking
-        self.total_steps = 6
+        self.total_steps = 9
         self.current_step = 0
         self.progress = 0
         self.progress_message = "Initializing..."
@@ -47,6 +86,9 @@ class DomScoutScanner:
             'merge': {'status': 'idle', 'count': 0},
             'dnsx': {'status': 'idle', 'count': 0},
             'httpx': {'status': 'idle', 'count': 0},
+            'gau': {'status': 'idle', 'count': 0},
+            'gospider': {'status': 'idle', 'count': 0},
+            'merge2': {'status': 'idle', 'count': 0},
             'gowitness': {'status': 'idle', 'count': 0}
         }
         
@@ -59,7 +101,10 @@ class DomScoutScanner:
             os.path.join(self.scan_dir, "crtsh.txt"),
             os.path.join(self.scan_dir, "subdomains.txt"),
             os.path.join(self.scan_dir, "live_subs.txt"),
-            os.path.join(self.scan_dir, "alive_webservices.txt")
+            os.path.join(self.scan_dir, "alive_webservices.txt"),
+            os.path.join(self.scan_dir, "gau_urls.txt"),
+            os.path.join(self.scan_dir, "gospider_urls.txt"),
+            os.path.join(self.scan_dir, "all_urls_merged.txt")
         ]
     
     def update_progress(self, step, message):
@@ -69,17 +114,25 @@ class DomScoutScanner:
         self.progress = (step / self.total_steps) * 100
     
     def run_command(self, command):
-        """Run a shell command silently"""
+        """Run a shell command and log output"""
         try:
-            subprocess.run(
+            self.logger.debug(f"Running command: {command[:200]}...")
+            result = subprocess.run(
                 command,
                 shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
                 cwd=self.scan_dir
             )
-        except subprocess.CalledProcessError:
+            if result.returncode != 0:
+                self.logger.warning(f"Command failed with code {result.returncode}")
+                if result.stderr:
+                    self.logger.warning(f"stderr: {result.stderr[:500]}")
+            else:
+                self.logger.debug(f"Command completed successfully")
+            return result
+        except Exception as e:
+            self.logger.error(f"Command exception: {e}")
             pass
     
     def get_chrome_path(self):
@@ -118,7 +171,10 @@ class DomScoutScanner:
             'merge': 'subdomains.txt',
             'dnsx': 'live_subs.txt',
             'httpx': 'alive_webservices.txt',
-            'gowitness': 'alive_webservices.txt'  # Same as httpx for now
+            'gau': 'gau_urls.txt',
+            'gospider': 'gospider_urls.txt',
+            'merge2': 'all_urls_merged.txt',
+            'gowitness': 'all_urls_merged.txt'
         }
         
         filename = file_map.get(tool_name)
@@ -140,6 +196,7 @@ class DomScoutScanner:
     
     def run_single_tool(self, tool_name):
         """Run a single tool"""
+        self.logger.debug(f"Starting tool: {tool_name}")
         self.tools_status[tool_name]['status'] = 'running'
         
         try:
@@ -159,11 +216,19 @@ class DomScoutScanner:
                 self._run_dnsx_tool()
             elif tool_name == 'httpx':
                 self._run_httpx_tool()
+            elif tool_name == 'gau':
+                self._run_gau()
+            elif tool_name == 'gospider':
+                self._run_gospider()
+            elif tool_name == 'merge2':
+                self._run_merge2()
             elif tool_name == 'gowitness':
                 self._run_gowitness_tool()
             
+            self.logger.info(f"Tool completed successfully: {tool_name} (count: {self.tools_status[tool_name]['count']})") 
             self.tools_status[tool_name]['status'] = 'completed'
         except Exception as e:
+            self.logger.error(f"Tool failed: {tool_name} - {e}")
             self.tools_status[tool_name]['status'] = 'failed'
             raise e
     
@@ -243,31 +308,50 @@ class DomScoutScanner:
         """Run httpx"""
         self.run_httpx()
         
-        # Parse URLs from httpx JSON output
+        # Parse URLs from httpx JSON output AND create alive_webservices.txt
         httpx_json = os.path.join(self.scan_dir, "httpx_output.json")
+        alive_file = os.path.join(self.scan_dir, "alive_webservices.txt")
+        
+        self.logger.info("HTTPx: Parsing output and creating alive_webservices.txt")
+        
         if os.path.exists(httpx_json):
             self.urls = []  # Clear previous URLs
+            alive_urls = []
             try:
                 with open(httpx_json, 'r') as f:
                     for line in f:
                         try:
                             data = json.loads(line)
                             if 'url' in data:
+                                url = data['url']
                                 self.urls.append({
-                                    'url': data['url'],
+                                    'url': url,
                                     'status_code': data.get('status_code'),
                                     'title': data.get('title'),
                                     'content_length': data.get('content_length')
                                 })
+                                alive_urls.append(url)
                         except json.JSONDecodeError:
                             pass
+                
+                # Write alive URLs to file for GAU/gospider
+                with open(alive_file, 'w') as f:
+                    for url in alive_urls:
+                        f.write(f"{url}\n")
+                
+                self.logger.info(f"HTTPx: Created {alive_file} with {len(alive_urls)} URLs")
+                        
             except Exception as e:
-                print(f"Error parsing httpx output: {e}")
+                self.logger.error(f"Error parsing httpx output: {e}")
             self.tools_status['httpx']['count'] = len(self.urls)
+        else:
+            self.logger.error(f"httpx_output.json not found at {httpx_json}")
     
     def _run_gowitness_tool(self):
         """Run gowitness"""
         self.run_gowitness()
+        
+        self.logger.info("GoWitness: Parsing database results")
         
         # Parse and save screenshots
         gowitness_db = os.path.join(self.scan_dir, "gowitness.sqlite3")
@@ -277,26 +361,38 @@ class DomScoutScanner:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
+                # Query the results table (not urls)
                 rows = cursor.execute(
-                    'SELECT url, final_url, response_code, response_code_text, title, filename FROM urls'
+                    'SELECT url, final_url, response_code, response_reason, title, filename FROM results WHERE filename IS NOT NULL'
                 ).fetchall()
+                
+                self.logger.info(f"GoWitness: Found {len(rows)} entries in database")
                 
                 # Clear previous screenshots for this scan
                 self.screenshots = []
                 
                 for row in rows:
-                    self.screenshots.append({
-                        'url': row['url'] or row['final_url'],
-                        'status_code': row['response_code'],
-                        'title': row['title'],
-                        'filename': os.path.join(self.scan_id, row['filename']),
-                        'headers': {}
-                    })
+                    screenshot_url = row['final_url'] or row['url']
+                    filename = row['filename']
+                    
+                    if filename:  # Only include if we have a screenshot filename
+                        self.screenshots.append({
+                            'url': screenshot_url,
+                            'status_code': row['response_code'],
+                            'title': row['title'],
+                            'filename': os.path.join(self.scan_id, filename.split('/')[-1]),  # Get just filename
+                            'headers': {}
+                        })
                 
+                self.logger.info(f"GoWitness: Extracted {len(self.screenshots)} screenshot records")
                 self.tools_status['gowitness']['count'] = len(self.screenshots)
                 conn.close()
             except Exception as e:
-                print(f"Error parsing gowitness database: {e}")
+                self.logger.error(f"Error parsing gowitness database: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+        else:
+            self.logger.warning(f"GoWitness: Database not found at {gowitness_db}")
     
     def run(self):
         """Run the full scanning process"""
@@ -319,12 +415,20 @@ class DomScoutScanner:
             self.update_progress(4, "Checking alive web services with httpx...")
             self.run_single_tool('httpx')
             
-            # Step 5: Take screenshots
-            self.update_progress(5, "Taking screenshots with gowitness...")
+            # Step 5: Run GAU and gospider in parallel
+            self.update_progress(5, "Extracting URLs with GAU and gospider...")
+            self.run_url_extraction()
+            
+            # Step 6: Merge all URLs
+            self.update_progress(6, "Merging all URLs...")
+            self.run_single_tool('merge2')
+            
+            # Step 7: Take screenshots
+            self.update_progress(7, "Taking screenshots with gowitness...")
             self.run_single_tool('gowitness')
             
-            # Step 6: Parse results
-            self.update_progress(6, "Processing results...")
+            # Step 8: Parse results
+            self.update_progress(8, "Processing results...")
             self.parse_results()
             
             # Cleanup
@@ -343,6 +447,19 @@ class DomScoutScanner:
     def run_enumeration(self):
         """Run parallel subdomain enumeration"""
         tools = ['subfinder', 'findomain', 'assetfinder', 'sublist3r', 'crtsh']
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.run_single_tool, tool) for tool in tools]
+            concurrent.futures.wait(futures)
+    
+    def run_url_extraction(self):
+        """Run GAU and gospider in parallel"""
+        self.logger.info("URL Extraction: Starting parallel execution of GAU and GoSpider")
+        
+        # Small delay to ensure alive_webservices.txt is fully written
+        time.sleep(0.5)
+        
+        tools = ['gau', 'gospider']
         
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.run_single_tool, tool) for tool in tools]
@@ -397,21 +514,43 @@ class DomScoutScanner:
             pass
     
     def run_httpx(self):
-        """Run httpx to find alive web services"""
+        """Run httpx to find alive web services with stealth flags"""
         live_subs_file = os.path.join(self.scan_dir, "live_subs.txt")
         alive_file = os.path.join(self.scan_dir, "alive_webservices.txt")
         httpx_json = os.path.join(self.scan_dir, "httpx_output.json")
         
         if not os.path.exists(live_subs_file) or os.path.getsize(live_subs_file) == 0:
+            print("HTTPx: live_subs.txt not found or empty")
             return
         
-        # Run httpx with JSON output to capture status codes
-        httpx_cmd = f"cat {live_subs_file} | httpx-toolkit -rl {self.rate_limit} -silent -status-code -json -o {httpx_json}"
+        # Run httpx with stealth flags to bypass WAFs/Cloudflare
+        # -random-agent: random user agent
+        # -H Custom headers to bypass protections
+        # -retries 2: retry failed requests
+        # -timeout 10: reasonable timeout
+        # -rl 150: rate limit to avoid detection
+        httpx_cmd = f"""cat {live_subs_file} | httpx-toolkit \
+            -silent \
+            -json \
+            -random-agent \
+            -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+            -H 'Accept-Language: en-US,en;q=0.5' \
+            -H 'Accept-Encoding: gzip, deflate' \
+            -H 'DNT: 1' \
+            -H 'Connection: keep-alive' \
+            -H 'Upgrade-Insecure-Requests: 1' \
+            -retries 2 \
+            -timeout 10 \
+            -rl 150 \
+            -o {httpx_json}"""
         
         try:
-            subprocess.run(httpx_cmd, shell=True, check=True, cwd=self.scan_dir)
-            
-            # Also create simple URL list for gowitness
+            result = subprocess.run(httpx_cmd, shell=True, capture_output=True, text=True, cwd=self.scan_dir)
+            print(f"HTTPx completed with exit code: {result.returncode}")
+            if result.stderr:
+                print(f"HTTPx stderr: {result.stderr[:200]}")
+                
+            # Create simple URL list
             if os.path.exists(httpx_json):
                 with open(alive_file, 'w') as outfile:
                     with open(httpx_json, 'r') as jsonfile:
@@ -422,15 +561,211 @@ class DomScoutScanner:
                                     outfile.write(data['url'] + '\n')
                             except json.JSONDecodeError:
                                 pass
-        except subprocess.CalledProcessError:
-            pass
+                print(f"HTTPx: Created {alive_file}")
+        except Exception as e:
+            print(f"HTTPx error: {e}")
+    
+    def _run_gau(self):
+        """Run GAU to extract URLs with stealth"""
+        alive_file = os.path.join(self.scan_dir, "alive_webservices.txt")
+        gau_output = os.path.join(self.scan_dir, "gau_urls.txt")
+        
+        self.logger.info("GAU: Starting URL extraction")
+        
+        if not os.path.exists(alive_file):
+            self.logger.error(f"GAU: {alive_file} not found")
+            return
+            
+        if os.path.getsize(alive_file) == 0:
+            self.logger.error(f"GAU: {alive_file} is empty")
+            return
+        
+        # Read URLs from alive_webservices.txt and extract domains
+        domains = set()
+        try:
+            with open(alive_file, 'r') as f:
+                for line in f:
+                    url = line.strip()
+                    if url:
+                        # Extract domain from URL without port
+                        from urllib.parse import urlparse
+                        parsed = urlparse(url)
+                        domain = parsed.netloc
+                        if domain:
+                            # Remove port if present (GAU doesn't handle ports)
+                            domain = domain.split(':')[0]
+                            domains.add(domain)
+            self.logger.info(f"GAU: Processing {len(domains)} domains")
+        except Exception as e:
+            self.logger.error(f"Error reading alive_webservices: {e}")
+            return
+        
+        # Use full path to gau
+        gau_bin = os.path.expanduser("~/go/bin/gau")
+        if not os.path.exists(gau_bin):
+            gau_bin = "gau"  # Fallback to PATH
+        
+        # Run GAU on each domain with stealth settings
+        # --blacklist: skip certain extensions
+        # --threads: parallel processing
+        # --timeout: avoid hanging
+        # --providers: use multiple sources
+        all_urls = set()
+        for domain in domains:
+            gau_cmd = f"echo {domain} | {gau_bin} --threads 5 --timeout 20 --blacklist ttf,woff,woff2,svg,eot --providers wayback,commoncrawl,otx,urlscan"
+            try:
+                self.logger.debug(f"GAU: Running for domain: {domain}")
+                result = subprocess.run(
+                    gau_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    cwd=self.scan_dir
+                )
+                if result.stdout:
+                    for url in result.stdout.strip().split('\n'):
+                        if url.strip():
+                            all_urls.add(url.strip())
+                    self.logger.debug(f"GAU: Found {len(all_urls)} total URLs so far for {domain}")
+                if result.stderr:
+                    self.logger.debug(f"GAU stderr for {domain}: {result.stderr[:200]}")
+            except Exception as e:
+                self.logger.error(f"Error running GAU for {domain}: {e}")
+                continue
+        
+        # Write results
+        with open(gau_output, 'w') as f:
+            for url in sorted(all_urls):
+                f.write(f"{url}\n")
+        
+        self.logger.info(f"GAU: Total {len(all_urls)} URLs saved to {gau_output}")
+        self.tools_status['gau']['count'] = len(all_urls)
+    
+    def _run_gospider(self):
+        """Run gospider to extract URLs with stealth settings"""
+        alive_file = os.path.join(self.scan_dir, "alive_webservices.txt")
+        gospider_output = os.path.join(self.scan_dir, "gospider_urls.txt")
+        
+        self.logger.info("GoSpider: Starting URL extraction")
+        
+        if not os.path.exists(alive_file):
+            self.logger.error(f"GoSpider: {alive_file} not found")
+            return
+            
+        if os.path.getsize(alive_file) == 0:
+            self.logger.error(f"GoSpider: {alive_file} is empty")
+            return
+        
+        # Use full path to gospider
+        gospider_bin = os.path.expanduser("~/go/bin/gospider")
+        if not os.path.exists(gospider_bin):
+            gospider_bin = "gospider"  # Fallback to PATH
+        
+        # Run gospider with stealth flags
+        # -S: sites list file
+        # -c: concurrent requests (lower to avoid detection)
+        # -d: depth  
+        # --sitemap --robots: crawl sitemap and robots.txt
+        # -m: timeout in seconds
+        # -q: quiet mode
+        # -u web: random web user-agent
+        # --blacklist: regex pattern to filter static files
+        # -a: enable other sources (Archive.org, CommonCrawl, etc.)
+        gospider_cmd = f"{gospider_bin} -S {alive_file} -c 5 -d 3 --sitemap --robots -m 20 -q -u web --blacklist '\\.(css|png|jpeg|jpg|svg|img|gif|mp4|flv|ogv|webm|webp|woff|woff2|ttf|eot|otf|ico)$' -a"
+        
+        try:
+            self.logger.debug(f"GoSpider: Running command: {gospider_cmd}")
+            result = subprocess.run(
+                gospider_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minutes timeout (gospider can be slow)
+                cwd=self.scan_dir
+            )
+            
+            self.logger.info(f"GoSpider completed with exit code: {result.returncode}")
+            if result.stderr:
+                self.logger.debug(f"GoSpider stderr: {result.stderr[:500]}")
+            
+            # Parse gospider output (format: [url_type] - url)
+            urls = set()
+            if result.stdout:
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        # Extract URL from gospider format: [type] - url
+                        if ' - ' in line:
+                            parts = line.split(' - ', 1)
+                            if len(parts) >= 2:
+                                url = parts[1].strip()
+                                if url and url.startswith('http'):
+                                    urls.add(url)
+                        # Also handle simple URL lines
+                        elif line.strip().startswith('http'):
+                            urls.add(line.strip())
+            
+            # Write results
+            with open(gospider_output, 'w') as f:
+                for url in sorted(urls):
+                    f.write(f"{url}\n")
+            
+            self.logger.info(f"GoSpider: Total {len(urls)} URLs saved to {gospider_output}")
+            self.tools_status['gospider']['count'] = len(urls)
+        except Exception as e:
+            self.logger.error(f"Error running gospider: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+    
+    def _run_merge2(self):
+        """Merge all URLs from httpx, GAU, and gospider"""
+        all_urls = set()
+        
+        # Files to merge
+        url_files = [
+            os.path.join(self.scan_dir, "alive_webservices.txt"),
+            os.path.join(self.scan_dir, "gau_urls.txt"),
+            os.path.join(self.scan_dir, "gospider_urls.txt")
+        ]
+        
+        for filepath in url_files:
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        for line in f:
+                            url = line.strip()
+                            if url:
+                                all_urls.add(url)
+                except Exception as e:
+                    print(f"Error reading {filepath}: {e}")
+        
+        # Save merged URLs
+        merged_file = os.path.join(self.scan_dir, "all_urls_merged.txt")
+        with open(merged_file, 'w') as f:
+            for url in sorted(all_urls):
+                f.write(f"{url}\n")
+        
+        self.tools_status['merge2']['count'] = len(all_urls)
+        return len(all_urls)
     
     def run_gowitness(self):
-        """Run gowitness to capture screenshots"""
-        alive_file = os.path.join(self.scan_dir, "alive_webservices.txt")
+        """Run gowitness to capture screenshots with stealth settings"""
+        alive_file = os.path.join(self.scan_dir, "all_urls_merged.txt")
         
-        if not os.path.exists(alive_file) or os.path.getsize(alive_file) == 0:
+        self.logger.info("GoWitness: Starting screenshot capture")
+        
+        if not os.path.exists(alive_file):
+            self.logger.error(f"GoWitness: {alive_file} not found")
             return
+            
+        if os.path.getsize(alive_file) == 0:
+            self.logger.error(f"GoWitness: {alive_file} is empty")
+            return
+        
+        # Count URLs
+        with open(alive_file, 'r') as f:
+            url_count = sum(1 for line in f if line.strip())
+        self.logger.info(f"GoWitness: Processing {url_count} URLs")
         
         # Create screenshots directory for this scan
         scan_screenshots_dir = os.path.join(self.screenshots_dir, self.scan_id)
@@ -442,43 +777,63 @@ class DomScoutScanner:
         gowitness_bin = os.path.expanduser("~/go/bin/gowitness")
         if not os.path.exists(gowitness_bin):
             gowitness_bin = "gowitness"  # Fallback to PATH
+            self.logger.debug(f"GoWitness: Using PATH fallback for gowitness binary")
         
+        # GoWitness with stealth flags
+        # --screenshot-path: where to save screenshots
+        # --write-db: output to SQLite database (needed for results)
+        # --delay: delay between requests  
+        # --delay: timeout for page load
+        # --threads: parallel processing
+        # --chrome-user-agent: custom user agent  
         gowitness_cmd = (
             f"{gowitness_bin} scan file -f {alive_file} "
-            f"--threads 20 --delay 2 --timeout 20 "
+            f"--threads 10 "
+            f"--delay 3 "
+            f"--timeout 30 "
             f"--screenshot-path {scan_screenshots_dir}/ "
-            f"--db-path {gowitness_db}"
+            f"--write-db "
+            f"--write-db-uri sqlite://{gowitness_db} "
+            f"--chrome-user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'"
         )
         
         chrome_path = self.get_chrome_path()
         if chrome_path:
             gowitness_cmd += f' --chrome-path "{chrome_path}"'
+            self.logger.debug(f"GoWitness: Using Chrome at {chrome_path}")
         
         try:
+            self.logger.debug(f"GoWitness: Running command (truncated): {gowitness_cmd[:200]}...")
             result = subprocess.run(
                 gowitness_cmd,
                 shell=True,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 cwd=self.scan_dir,
-                text=True
+                text=True,
+                timeout=600  # 10 minutes max
             )
-            print(f"GoWitness completed successfully")
+            self.logger.info(f"GoWitness completed with exit code: {result.returncode}")
             if result.stdout:
-                print(f"GoWitness output: {result.stdout}")
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr if e.stderr else str(e)
-            print(f"GoWitness error (exit code {e.returncode}): {error_msg}")
-            if e.stdout:
-                print(f"GoWitness stdout: {e.stdout}")
+                self.logger.debug(f"GoWitness stdout: {result.stdout[:500]}")
+            if result.stderr:
+                self.logger.debug(f"GoWitness stderr: {result.stderr[:500]}")
+                
+            # Check if screenshots were created
+            if os.path.exists(scan_screenshots_dir):
+                screenshots = [f for f in os.listdir(scan_screenshots_dir) if f.endswith('.png')]
+                self.logger.info(f"GoWitness: Created {len(screenshots)} screenshot files")
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"GoWitness timed out after 10 minutes")
+        except Exception as e:
+            self.logger.error(f"GoWitness error: {e}")
     
     def parse_results(self):
         """Parse all results"""
-        # Parse URLs
-        alive_file = os.path.join(self.scan_dir, "alive_webservices.txt")
-        if os.path.exists(alive_file):
-            with open(alive_file, 'r') as f:
+        # Parse URLs from merged file
+        merged_file = os.path.join(self.scan_dir, "all_urls_merged.txt")
+        if os.path.exists(merged_file):
+            with open(merged_file, 'r') as f:
                 for line in f:
                     url = line.strip()
                     if url:

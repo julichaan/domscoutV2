@@ -388,6 +388,9 @@ def get_tools_status(scan_id):
                     'merge': 'subdomains.txt',
                     'dnsx': 'live_subs.txt',
                     'httpx': 'alive_webservices.txt',
+                    'gau': 'gau_urls.txt',
+                    'gospider': 'gospider_urls.txt',
+                    'merge2': 'all_urls_merged.txt',
                     'gowitness': 'gowitness.sqlite3'
                 }
                 
@@ -497,6 +500,22 @@ def run_tool_async(scanner, tool_name):
                     'INSERT INTO urls (scan_id, url, status_code) VALUES (?, ?, ?)',
                     (scanner.scan_id, url_data['url'], url_data.get('status_code'))
                 )
+        
+        elif tool_name == 'merge2':
+            # Save merged URLs after merge2
+            # First delete existing urls for this scan
+            cursor.execute('DELETE FROM urls WHERE scan_id = ?', (scanner.scan_id,))
+            # Read from all_urls_merged.txt
+            merged_file = os.path.join(scanner.scan_dir, "all_urls_merged.txt")
+            if os.path.exists(merged_file):
+                with open(merged_file, 'r') as f:
+                    for line in f:
+                        url = line.strip()
+                        if url:
+                            cursor.execute(
+                                'INSERT INTO urls (scan_id, url, status_code) VALUES (?, ?, ?)',
+                                (scanner.scan_id, url, None)
+                            )
         
         elif tool_name == 'gowitness':
             # Save screenshots after gowitness

@@ -1,0 +1,6 @@
+api.inheritans.com
+api-dev.inheritans.com
+dev.inheritans.com
+www.inheritans.com
+roadmap.inheritans.com
+inheritans.com

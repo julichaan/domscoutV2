@@ -111,6 +111,39 @@
             :disabled="!hasLiveSubdomains"
           />
 
+          <!-- Tool Card: GAU -->
+          <ToolCard
+            title="GAU"
+            description="Get All URLs from AlienVault, Wayback, etc."
+            :status="tools.gau.status"
+            :count="tools.gau.count"
+            @run="runTool('gau')"
+            @view-results="viewToolResults('gau')"
+            :disabled="!hasAliveUrls"
+          />
+
+          <!-- Tool Card: gospider -->
+          <ToolCard
+            title="GoSpider"
+            description="Fast web spider for URL extraction"
+            :status="tools.gospider.status"
+            :count="tools.gospider.count"
+            @run="runTool('gospider')"
+            @view-results="viewToolResults('gospider')"
+            :disabled="!hasAliveUrls"
+          />
+
+          <!-- Tool Card: Merge2 -->
+          <ToolCard
+            title="Merge URLs"
+            description="Consolidate all extracted URLs"
+            :status="tools.merge2.status"
+            :count="tools.merge2.count"
+            @run="runTool('merge2')"
+            @view-results="viewToolResults('merge2')"
+            :disabled="!hasUrlExtractionResults"
+          />
+
           <!-- Tool Card: GoWitness -->
           <ToolCard
             title="GoWitness"
@@ -119,7 +152,7 @@
             :count="tools.gowitness.count"
             @run="runTool('gowitness')"
             @view-results="viewToolResults('gowitness')"
-            :disabled="!hasAliveUrls"
+            :disabled="!hasMerge2Results"
           />
         </div>
       </div>
@@ -185,6 +218,9 @@ export default {
         merge: { status: 'idle', count: 0 },
         dnsx: { status: 'idle', count: 0 },
         httpx: { status: 'idle', count: 0 },
+        gau: { status: 'idle', count: 0 },
+        gospider: { status: 'idle', count: 0 },
+        merge2: { status: 'idle', count: 0 },
         gowitness: { status: 'idle', count: 0 }
       },
       pollInterval: null,
@@ -210,6 +246,12 @@ export default {
     },
     hasAliveUrls() {
       return this.tools.httpx.count > 0
+    },
+    hasUrlExtractionResults() {
+      return this.tools.gau.count > 0 || this.tools.gospider.count > 0
+    },
+    hasMerge2Results() {
+      return this.tools.merge2.count > 0
     },
     scanComplete() {
       return this.tools.gowitness.status === 'completed'
