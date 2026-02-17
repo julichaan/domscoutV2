@@ -23,10 +23,81 @@ CORS(app)
 DB_PATH = os.path.join(os.path.dirname(__file__), 'domscout.db')
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'screenshots')
 RESOLVERS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'resolvers.txt')
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), 'settings.json')
+SUBFINDER_CONFIG_PATH = os.path.expanduser('~/.config/subfinder/provider-config.yaml')
 
 # Ensure directories exist
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+# 50 legitimate user agents for rotation
+USER_AGENTS = [
+    # Chrome - Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    # Chrome - macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    # Chrome - Linux
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    # Firefox - Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    # Firefox - macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:120.0) Gecko/20100101 Firefox/120.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:121.0) Gecko/20100101 Firefox/121.0',
+    # Firefox - Linux
+    'Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0',
+    # Safari - macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15',
+    # Safari - iOS
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPad; CPU OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+    # Edge - Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.0.0',
+    # Chrome Mobile - Android
+    'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    # Firefox Mobile - Android
+    'Mozilla/5.0 (Android 13; Mobile; rv:121.0) Gecko/121.0 Firefox/121.0',
+    'Mozilla/5.0 (Android 12; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0',
+    # Opera
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0',
+    # Brave
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Brave/120.0.0.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Brave/120.0.0.0',
+    # Vivaldi
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Vivaldi/6.5.3206.53',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Vivaldi/6.5.3206.53',
+    # Additional Chrome versions
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+]
 
 # Global scan tracking
 active_scans = {}
@@ -81,6 +152,7 @@ def init_db():
             status_code INTEGER,
             title TEXT,
             headers TEXT,
+            roi_score INTEGER DEFAULT 50,
             FOREIGN KEY (scan_id) REFERENCES scans(id)
         )
     ''')
@@ -136,8 +208,12 @@ def create_target():
     conn.commit()
     conn.close()
     
+    # Load settings
+    settings = load_settings()
+    rotate_ua = settings.get('rotate_user_agents', False)
+    
     # Create scanner instance but don't start it
-    scanner = DomScoutScanner(scan_id, domain, rate_limit, RESOLVERS_FILE, SCREENSHOTS_DIR)
+    scanner = DomScoutScanner(scan_id, domain, rate_limit, RESOLVERS_FILE, SCREENSHOTS_DIR, rotate_ua)
     active_scans[scan_id] = scanner
     
     return jsonify({'scan_id': scan_id, 'status': 'created'})
@@ -166,8 +242,12 @@ def start_scan():
     conn.commit()
     conn.close()
     
+    # Load settings
+    settings = load_settings()
+    rotate_ua = settings.get('rotate_user_agents', False)
+    
     # Start scan in background thread
-    scanner = DomScoutScanner(scan_id, domain, rate_limit, RESOLVERS_FILE, SCREENSHOTS_DIR)
+    scanner = DomScoutScanner(scan_id, domain, rate_limit, RESOLVERS_FILE, SCREENSHOTS_DIR, rotate_ua)
     active_scans[scan_id] = scanner
     
     thread = threading.Thread(target=run_scan, args=(scanner,))
@@ -229,10 +309,10 @@ def save_scan_results(scanner):
     # Save screenshots
     for screenshot in scanner.screenshots:
         cursor.execute(
-            'INSERT INTO screenshots (scan_id, url, filename, status_code, title, headers) VALUES (?, ?, ?, ?, ?, ?)',
+            'INSERT INTO screenshots (scan_id, url, filename, status_code, title, headers, roi_score) VALUES (?, ?, ?, ?, ?, ?, ?)',
             (scanner.scan_id, screenshot['url'], screenshot['filename'], 
              screenshot.get('status_code'), screenshot.get('title'), 
-             json.dumps(screenshot.get('headers', {})))
+             json.dumps(screenshot.get('headers', {})), screenshot.get('roi_score', 50))
         )
     
     conn.commit()
@@ -330,7 +410,7 @@ def get_screenshots(scan_id):
     cursor = conn.cursor()
     
     rows = cursor.execute(
-        'SELECT * FROM screenshots WHERE scan_id = ? ORDER BY url',
+        'SELECT * FROM screenshots WHERE scan_id = ? ORDER BY roi_score DESC, url',
         (scan_id,)
     ).fetchall()
     
@@ -367,12 +447,17 @@ def get_tools_status(scan_id):
         if not scan:
             return jsonify({'error': 'Scan not found'}), 404
         
+        # Load settings
+        settings = load_settings()
+        rotate_ua = settings.get('rotate_user_agents', False)
+        
         scanner = DomScoutScanner(
             scan_id,
             scan['domain'],
             scan['rate_limit'] or 150,
             RESOLVERS_FILE,
-            SCREENSHOTS_DIR
+            SCREENSHOTS_DIR,
+            rotate_ua
         )
         
         # Load counts from filesystem
@@ -384,7 +469,6 @@ def get_tools_status(scan_id):
                     'findomain': 'findomain.txt',
                     'assetfinder': 'assetfinder.txt',
                     'sublist3r': 'sublist3r.txt',
-                    'crtsh': 'crtsh.txt',
                     'merge': 'subdomains.txt',
                     'dnsx': 'live_subs.txt',
                     'httpx': 'alive_webservices.txt',
@@ -523,10 +607,10 @@ def run_tool_async(scanner, tool_name):
             cursor.execute('DELETE FROM screenshots WHERE scan_id = ?', (scanner.scan_id,))
             for screenshot in scanner.screenshots:
                 cursor.execute(
-                    'INSERT INTO screenshots (scan_id, url, filename, status_code, title, headers) VALUES (?, ?, ?, ?, ?, ?)',
+                    'INSERT INTO screenshots (scan_id, url, filename, status_code, title, headers, roi_score) VALUES (?, ?, ?, ?, ?, ?, ?)',
                     (scanner.scan_id, screenshot['url'], screenshot['filename'], 
                      screenshot.get('status_code'), screenshot.get('title'), 
-                     json.dumps(screenshot.get('headers', {})))
+                     json.dumps(screenshot.get('headers', {})), screenshot.get('roi_score', 50))
                 )
         
         conn.commit()
@@ -553,13 +637,18 @@ def get_tool_results(scan_id, tool_name):
         if not scan:
             return jsonify({'error': 'Scan not found'}), 404
         
+        # Load settings
+        settings = load_settings()
+        rotate_ua = settings.get('rotate_user_agents', False)
+        
         # Create scanner instance to read results from filesystem
         scanner = DomScoutScanner(
             scan_id,
             scan['domain'],
             scan['rate_limit'] or 150,
             RESOLVERS_FILE,
-            SCREENSHOTS_DIR
+            SCREENSHOTS_DIR,
+            rotate_ua
         )
     
     results = scanner.get_tool_results(tool_name)
@@ -624,6 +713,89 @@ def get_scans():
 def serve_screenshot(filename):
     """Serve screenshot files"""
     return send_from_directory(SCREENSHOTS_DIR, filename)
+
+
+# ========== SETTINGS ENDPOINTS ==========
+
+def load_settings():
+    """Load settings from JSON file"""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {'rotate_user_agents': False}
+
+
+def save_settings(settings):
+    """Save settings to JSON file"""
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error saving settings: {e}")
+        return False
+
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Get current settings"""
+    settings = load_settings()
+    return jsonify({'settings': settings})
+
+
+@app.route('/api/settings/user-agents', methods=['POST'])
+def update_user_agents_setting():
+    """Update user-agents rotation setting"""
+    try:
+        data = request.get_json()
+        enabled = data.get('enabled', False)
+        
+        settings = load_settings()
+        settings['rotate_user_agents'] = enabled
+        
+        if save_settings(settings):
+            return jsonify({'success': True, 'message': 'Settings updated'})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save settings'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/settings/subfinder-config', methods=['GET'])
+def get_subfinder_config():
+    """Get subfinder provider config"""
+    try:
+        if os.path.exists(SUBFINDER_CONFIG_PATH):
+            with open(SUBFINDER_CONFIG_PATH, 'r') as f:
+                content = f.read()
+            return jsonify({'success': True, 'content': content, 'path': SUBFINDER_CONFIG_PATH})
+        else:
+            return jsonify({'success': True, 'content': '', 'path': SUBFINDER_CONFIG_PATH, 'message': 'File does not exist yet'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/settings/subfinder-config', methods=['POST'])
+def update_subfinder_config():
+    """Update subfinder provider config"""
+    try:
+        data = request.get_json()
+        content = data.get('content', '')
+        
+        # Ensure directory exists
+        config_dir = os.path.dirname(SUBFINDER_CONFIG_PATH)
+        os.makedirs(config_dir, exist_ok=True)
+        
+        # Write config file
+        with open(SUBFINDER_CONFIG_PATH, 'w') as f:
+            f.write(content)
+        
+        return jsonify({'success': True, 'message': 'Subfinder config updated'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':

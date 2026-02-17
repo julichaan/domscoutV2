@@ -16,7 +16,7 @@ DomScout v2 is a complete rewrite of the original DomScout tool, featuring a mod
 ## 🌟 Features
 
 - **Modern Web Interface**: Vue.js 3 frontend with real-time progress tracking
-- **Multi-Tool Integration**: Combines results from `subfinder`, `findomain`, `assetfinder`, `sublist3r`, and `crt.sh`
+- **Multi-Tool Integration**: Combines results from `subfinder`, `findomain`, `assetfinder`, and `sublist3r`
 - **Live Verification**: Uses `dnsx` and `httpx` to verify reachable subdomains and web services
 - **Screenshot Gallery**: Captures screenshots of all live services with gowitness
 - **Integrated Results Viewer**: Browse screenshots, metadata, and status codes directly in the web interface (no need for external gowitness server)
@@ -180,7 +180,7 @@ DomScout v2 follows the design principles of the [ars0n-framework-v2](https://gi
 
 ## 📊 How It Works
 
-1. **Parallel Enumeration**: Runs 5 tools simultaneously (subfinder, findomain, assetfinder, sublist3r, crt.sh)
+1. **Parallel Enumeration**: Runs 4 tools simultaneously (subfinder, findomain, assetfinder, sublist3r)
 2. **Deduplication**: Merges and removes duplicate subdomains
 3. **DNS Resolution**: Uses dnsx with custom resolvers to find live subdomains
 4. **HTTP Probing**: httpx verifies which subdomains have active web services

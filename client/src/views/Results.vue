@@ -93,6 +93,7 @@
         <table class="results-table">
           <thead>
             <tr>
+              <th class="col-roi">ROI Score</th>
               <th class="col-screenshot">Screenshot</th>
               <th class="col-status">Status</th>
               <th class="col-url">URL</th>
@@ -106,6 +107,11 @@
               :key="index"
               class="result-row"
             >
+              <td class="col-roi">
+                <span class="roi-badge" :class="'roi-' + getRoiBadgeClass(result.roi_score)">
+                  {{ result.roi_score || 50 }}
+                </span>
+              </td>
               <td class="col-screenshot">
                 <div
                   v-if="result.screenshot"
@@ -367,12 +373,18 @@ export default {
           url: urlData.url,
           status_code: urlData.status_code,
           title: screenshot ? screenshot.title : (urlData.title || null),
-          screenshot: screenshot || null
+          screenshot: screenshot || null,
+          roi_score: screenshot ? screenshot.roi_score : 50
         }
       })
 
-      // Sort by status code (successful first)
+      // Sort by ROI score (descending), then by status code
       this.results.sort((a, b) => {
+        const roiA = a.roi_score || 50
+        const roiB = b.roi_score || 50
+        if (roiA !== roiB) {
+          return roiB - roiA  // Higher ROI first
+        }
         const codeA = a.status_code || 999
         const codeB = b.status_code || 999
         return codeA - codeB
@@ -413,6 +425,14 @@ export default {
       const mins = Math.floor(seconds / 60)
       const secs = seconds % 60
       return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+    },
+    getRoiBadgeClass(roiScore) {
+      const score = roiScore || 50
+      if (score >= 200) return 'danger'    // Red - Very high ROI
+      if (score >= 150) return 'warning'   // Orange - High ROI
+      if (score >= 100) return 'info'      // Blue - Medium ROI
+      if (score >= 75) return 'success'    // Green - Low-Medium ROI
+      return 'secondary'                   // Gray - Low ROI
     }
   }
 }
@@ -642,6 +662,46 @@ export default {
 }
 
 /* Table Columns */
+.col-roi {
+  width: 100px;
+  text-align: center;
+}
+
+.roi-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 50px;
+  text-align: center;
+}
+
+.roi-badge.roi-secondary {
+  background: #6b7280;
+  color: white;
+}
+
+.roi-badge.roi-success {
+  background: #10b981;
+  color: white;
+}
+
+.roi-badge.roi-info {
+  background: #3b82f6;
+  color: white;
+}
+
+.roi-badge.roi-warning {
+  background: #f59e0b;
+  color: white;
+}
+
+.roi-badge.roi-danger {
+  background: #ef4444;
+  color: white;
+}
+
 .col-screenshot {
   width: 180px;
 }

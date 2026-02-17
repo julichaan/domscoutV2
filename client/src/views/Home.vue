@@ -12,6 +12,10 @@
         </pre>
         <p class="subtitle">Bug Bounty Subdomain Enumeration Framework</p>
         <p class="author">by julichaan</p>
+        
+        <button class="btn-settings" @click="goToSettings" title="Settings">
+          ⚙️
+        </button>
       </div>
 
       <div class="scan-section card fade-in">
@@ -151,6 +155,9 @@ export default {
         alert('Failed to delete scan')
       }
     },
+    goToSettings() {
+      this.$router.push('/settings')
+    },
     formatDate(dateString) {
       const date = new Date(dateString)
       return date.toLocaleString()
@@ -168,6 +175,30 @@ export default {
 .banner {
   text-align: center;
   margin-bottom: 50px;
+  position: relative;
+}
+
+.btn-settings {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.btn-settings:hover {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  transform: rotate(90deg);
 }
 
 .ascii-art {

@@ -182,14 +182,13 @@ def main():
         print(f"[!] Error: Resolvers file at {resolvers} is empty.")
         sys.exit(1)
     
-    filenames = ["subfinder-rescursive.txt", "findomain.txt", "assetfinder.txt", "sublist3r.txt", "crtsh.txt"]
+    filenames = ["subfinder-rescursive.txt", "findomain.txt", "assetfinder.txt", "sublist3r.txt"]
     
     commands = [
         (f"subfinder -d {target} -all -silent -o subfinder-rescursive.txt", "subfinder"),
         (f"findomain --quiet -t {target} > findomain.txt", "findomain"),
         (f"assetfinder -subs-only {target} > assetfinder.txt", "assetfinder"),
-        (f"sublist3r -d {target} -t 50 -o sublist3r.txt", "sublist3r"),
-        (f'curl -s "https://crt.sh/?q=%25.{target}&output=json" | jq -r \'.[].name_value\' | sed \'s/\\*\\.//g\' > "crtsh.txt"', "crt.sh")
+        (f"sublist3r -d {target} -t 50 -o sublist3r.txt", "sublist3r")
     ]
 
     total_steps = len(commands) + 5 

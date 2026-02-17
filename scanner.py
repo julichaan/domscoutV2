@@ -9,11 +9,81 @@ import json
 import sqlite3
 import logging
 import sys
+import random
 
 
 # Configure logging to output to both console and a log file
 log_dir = os.path.expanduser("~/domscout_logs")
 os.makedirs(log_dir, exist_ok=True)
+
+# 50 legitimate user agents for rotation
+USER_AGENTS = [
+    # Chrome - Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    # Chrome - macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    # Chrome - Linux
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    # Firefox - Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    # Firefox - macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:120.0) Gecko/20100101 Firefox/120.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:121.0) Gecko/20100101 Firefox/121.0',
+    # Firefox - Linux
+    'Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0',
+    # Safari - macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15',
+    # Safari - iOS
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPad; CPU OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+    # Edge - Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.0.0',
+    # Chrome Mobile - Android
+    'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    # Firefox Mobile - Android
+    'Mozilla/5.0 (Android 13; Mobile; rv:121.0) Gecko/121.0 Firefox/121.0',
+    'Mozilla/5.0 (Android 12; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0',
+    # Opera
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0',
+    # Brave
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Brave/120.0.0.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Brave/120.0.0.0',
+    # Vivaldi
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Vivaldi/6.5.3206.53',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Vivaldi/6.5.3206.53',
+    # Additional Chrome versions
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+]
 
 def setup_logging(scan_id):
     """Setup logging for a specific scan"""
@@ -44,12 +114,13 @@ def setup_logging(scan_id):
 
 
 class DomScoutScanner:
-    def __init__(self, scan_id, target, rate_limit, resolvers_file, screenshots_dir):
+    def __init__(self, scan_id, target, rate_limit, resolvers_file, screenshots_dir, rotate_user_agents=False):
         self.scan_id = scan_id
         self.target = target
         self.rate_limit = rate_limit
         self.resolvers_file = resolvers_file
         self.screenshots_dir = screenshots_dir
+        self.rotate_user_agents = rotate_user_agents
         
         # Setup logging for this scan
         self.logger = setup_logging(scan_id)
@@ -82,7 +153,6 @@ class DomScoutScanner:
             'findomain': {'status': 'idle', 'count': 0},
             'assetfinder': {'status': 'idle', 'count': 0},
             'sublist3r': {'status': 'idle', 'count': 0},
-            'crtsh': {'status': 'idle', 'count': 0},
             'merge': {'status': 'idle', 'count': 0},
             'dnsx': {'status': 'idle', 'count': 0},
             'httpx': {'status': 'idle', 'count': 0},
@@ -98,7 +168,6 @@ class DomScoutScanner:
             os.path.join(self.scan_dir, "findomain.txt"),
             os.path.join(self.scan_dir, "assetfinder.txt"),
             os.path.join(self.scan_dir, "sublist3r.txt"),
-            os.path.join(self.scan_dir, "crtsh.txt"),
             os.path.join(self.scan_dir, "subdomains.txt"),
             os.path.join(self.scan_dir, "live_subs.txt"),
             os.path.join(self.scan_dir, "alive_webservices.txt"),
@@ -112,6 +181,10 @@ class DomScoutScanner:
         self.current_step = step
         self.progress_message = message
         self.progress = (step / self.total_steps) * 100
+    
+    def get_random_user_agent(self):
+        """Get a random user agent from the list"""
+        return random.choice(USER_AGENTS)
     
     def run_command(self, command):
         """Run a shell command and log output"""
@@ -157,9 +230,125 @@ class DomScoutScanner:
         """Get the current status of all tools"""
         return self.tools_status
     
+    def calculate_roi_score(self, httpx_data, url=''):
+        """Calculate ROI score with URL complexity analysis
+        
+        Args:
+            httpx_data: Dictionary with httpx response data
+            url: Optional URL for additional pattern/complexity analysis
+        """
+        score = 50  # Base score
+        
+        try:
+            # URL complexity analysis - add points based on URL patterns and structure
+            if url:
+                url_lower = url.lower()
+                
+                # Path depth analysis - deeper paths are more complex
+                path_parts = [p for p in url.split('/') if p and p not in ['https:', '', 'http:']]
+                if len(path_parts) > 2:  # Deep paths more complex
+                    score += min(10, (len(path_parts) - 2) * 2)
+                
+                # URL length (longer = potentially more complex)
+                if len(url) > 100:
+                    score += 5
+                
+                # Special patterns indicating functionality/complexity
+                special_patterns = {
+                    'api': 5,
+                    'admin': 5,
+                    'config': 4,
+                    'settings': 3,
+                    'account': 2,
+                    'user': 2,
+                    'login': 3,
+                    'auth': 3,
+                    'download': 2,
+                    'upload': 2,
+                    'search': 2,
+                }
+                for pattern, points in special_patterns.items():
+                    if f'/{pattern}' in url_lower or f'?{pattern}' in url_lower or f'&{pattern}' in url_lower:
+                        score += points
+                        break  # Only count first matching pattern
+            
+            # Extract data from httpx response
+            status_code = httpx_data.get('status-code', 200)
+            content_length = httpx_data.get('content-length', 0)
+            webserver = httpx_data.get('webserver', '').lower()
+            headers = httpx_data.get('headers', {})
+            
+            # Status code weights
+            if status_code == 404:
+                score += 50
+            elif status_code == 403:
+                score += 20
+            elif status_code == 401:
+                score += 15
+            elif status_code >= 500:
+                score += 15
+            elif status_code >= 400:
+                score += 10
+            
+            # Header Analysis
+            if isinstance(headers, dict):
+                header_keys_lower = [h.lower() for h in headers.keys()]
+                
+                #  Caching
+                if any(h in header_keys_lower for h in ['cache-control', 'etag', 'expires', 'vary']):
+                    score += 10
+                
+                # Missing security headers
+                missing = sum(1 for h in ['x-frame-options', 'x-content-type-options', 'strict-transport-security']
+                              if h not in header_keys_lower)
+                if missing >= 2:
+                    score += missing * 3
+                
+                # Tech indicators
+                if any(h in header_keys_lower for h in ['x-powered-by', 'server', 'x-aspnet-version']):
+                    score += 3
+            
+            # CSP
+            csp = httpx_data.get('csp', {})
+            if csp and isinstance(csp, dict) and len(csp.get('domains', [])) > 10:
+                score += 5
+            elif status_code == 200 and content_length > 1000 and not csp:
+                score += 10
+            
+            # Content complexity
+            if content_length > 100000:
+                score += 3
+            elif content_length > 50000:
+                score += 2
+            elif content_length > 10000:
+                score += 1
+            
+            if webserver:
+                score += 2
+            
+            return max(50, min(250, round(score)))
+        except Exception as e:
+            self.logger.error(f"Error calculating ROI score: {e}")
+            return 50
+    
     def get_tool_results(self, tool_name):
         """Get results from a specific tool"""
         results = []
+        
+        # Special handling for gowitness - return scored and sorted results
+        if tool_name == 'gowitness':
+            scored_file = os.path.join(self.scan_dir, 'gowitness_scored_results.json')
+            if os.path.exists(scored_file):
+                try:
+                    with open(scored_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        # Sort by ROI score descending, then by URL
+                        sorted_urls = sorted(data, key=lambda x: (-x.get('roi_score', 0), x.get('url', '')))
+                        for item in sorted_urls:
+                            results.append(f"{item['url']} [ROI: {item.get('roi_score', 0)}]")
+                except Exception as e:
+                    self.logger.error(f"Error reading scored results: {e}")
+            return results
         
         # Map tool names to their result files
         file_map = {
@@ -167,14 +356,12 @@ class DomScoutScanner:
             'findomain': 'findomain.txt',
             'assetfinder': 'assetfinder.txt',
             'sublist3r': 'sublist3r.txt',
-            'crtsh': 'crtsh.txt',
             'merge': 'subdomains.txt',
             'dnsx': 'live_subs.txt',
             'httpx': 'alive_webservices.txt',
             'gau': 'gau_urls.txt',
             'gospider': 'gospider_urls.txt',
-            'merge2': 'all_urls_merged.txt',
-            'gowitness': 'all_urls_merged.txt'
+            'merge2': 'all_urls_merged.txt'
         }
         
         filename = file_map.get(tool_name)
@@ -208,8 +395,6 @@ class DomScoutScanner:
                 self._run_assetfinder()
             elif tool_name == 'sublist3r':
                 self._run_sublist3r()
-            elif tool_name == 'crtsh':
-                self._run_crtsh()
             elif tool_name == 'merge':
                 self._run_merge()
             elif tool_name == 'dnsx':
@@ -272,16 +457,6 @@ class DomScoutScanner:
         if os.path.exists(filepath):
             with open(filepath, 'r') as f:
                 self.tools_status['sublist3r']['count'] = sum(1 for line in f if line.strip())
-    
-    def _run_crtsh(self):
-        """Run crt.sh query"""
-        cmd = f'curl -s "https://crt.sh/?q=%25.{self.target}&output=json" | jq -r \'.[].name_value\' | sed \'s/\\*\\.//g\' > crtsh.txt'
-        self.run_command(cmd)
-        
-        filepath = os.path.join(self.scan_dir, "crtsh.txt")
-        if os.path.exists(filepath):
-            with open(filepath, 'r') as f:
-                self.tools_status['crtsh']['count'] = sum(1 for line in f if line.strip())
     
     def _run_merge(self):
         """Merge and deduplicate all subdomains"""
@@ -348,51 +523,185 @@ class DomScoutScanner:
             self.logger.error(f"httpx_output.json not found at {httpx_json}")
     
     def _run_gowitness_tool(self):
-        """Run gowitness"""
+        """Run gowitness and calculate ROI scores using httpx data"""
         self.run_gowitness()
         
-        self.logger.info("GoWitness: Parsing database results")
+        self.logger.info("GoWitness: Processing URLs and calculating ROI scores")
         
-        # Parse and save screenshots
+        # Load httpx data indexed by URL
+        httpx_data_list = []
+        httpx_json = os.path.join(self.scan_dir, "httpx_output.json")
+        
+        if os.path.exists(httpx_json):
+            try:
+                with open(httpx_json, 'r') as f:
+                    for line in f:
+                        try:
+                            data = json.loads(line)
+                            if 'url' in data:
+                                httpx_data_list.append(data)
+                        except json.JSONDecodeError:
+                            pass
+                self.logger.info(f"GoWitness: Loaded {len(httpx_data_list)} URLs from httpx for ROI scoring")
+            except Exception as e:
+                self.logger.error(f"Error loading httpx data: {e}")
+                httpx_data_list = []
+        
+        # Try to load from gowitness database first
         gowitness_db = os.path.join(self.scan_dir, "gowitness.sqlite3")
-        if os.path.exists(gowitness_db):
+        scored_results = []
+        self.screenshots = []
+        
+        # Check if gowitness database has data
+        has_gowitness_data = False
+        if os.path.exists(gowitness_db) and os.path.getsize(gowitness_db) > 0:
             try:
                 conn = sqlite3.connect(gowitness_db)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # Query the results table (not urls)
                 rows = cursor.execute(
                     'SELECT url, final_url, response_code, response_reason, title, filename FROM results WHERE filename IS NOT NULL'
                 ).fetchall()
                 
-                self.logger.info(f"GoWitness: Found {len(rows)} entries in database")
-                
-                # Clear previous screenshots for this scan
-                self.screenshots = []
-                
-                for row in rows:
-                    screenshot_url = row['final_url'] or row['url']
-                    filename = row['filename']
+                if rows and len(rows) > 0:
+                    has_gowitness_data = True
+                    self.logger.info(f"GoWitness: Found {len(rows)} entries in database")
                     
-                    if filename:  # Only include if we have a screenshot filename
+                    for row in rows:
+                        screenshot_url = row['final_url'] or row['url']
+                        filename = row['filename']
+                        status_code = row['response_code'] or 200
+                        title = row['title'] or ''
+                        
+                        if not filename:
+                            continue
+                        
+                        # Find matching httpx data
+                        httpx_data = None
+                        for h_data in httpx_data_list:
+                            if self._urls_match(screenshot_url, h_data.get('url', '')):
+                                httpx_data = h_data
+                                break
+                        
+                        # Calculate ROI score - use individual status code but httpx data for other factors
+                        if httpx_data:
+                            # Merge GoWitness status code with httpx data
+                            merged_data = dict(httpx_data)
+                            merged_data['status-code'] = status_code  # Use individual URL's status code
+                            roi_score = self.calculate_roi_score(merged_data, screenshot_url)
+                            self.logger.debug(f"ROI with httpx data (status {status_code}): {roi_score} for {screenshot_url}")
+                        else:
+                            roi_score = self.calculate_roi_score({
+                                'status-code': status_code,
+                                'content-length': 0,
+                                'headers': {}
+                            })
+                            self.logger.warning(f"No httpx match for {screenshot_url}, base score: {roi_score}")
+                        
                         self.screenshots.append({
                             'url': screenshot_url,
-                            'status_code': row['response_code'],
-                            'title': row['title'],
-                            'filename': os.path.join(self.scan_id, filename.split('/')[-1]),  # Get just filename
-                            'headers': {}
+                            'status_code': status_code,
+                            'title': title,
+                            'filename': os.path.join(self.scan_id, os.path.basename(filename)),
+                            'roi_score': roi_score
+                        })
+                        
+                        scored_results.append({
+                            'url': screenshot_url,
+                            'status_code': status_code,
+                            'title': title,
+                            'roi_score': roi_score,
+                            'screenshot': os.path.join(self.scan_id, os.path.basename(filename))
                         })
                 
-                self.logger.info(f"GoWitness: Extracted {len(self.screenshots)} screenshot records")
-                self.tools_status['gowitness']['count'] = len(self.screenshots)
                 conn.close()
             except Exception as e:
-                self.logger.error(f"Error parsing gowitness database: {e}")
-                import traceback
-                self.logger.error(traceback.format_exc())
+                self.logger.error(f"Error reading gowitness database: {e}")
+                has_gowitness_data = False
+        
+        # If gowitness database is empty, use httpx data directly
+        if not has_gowitness_data and httpx_data_list:
+            self.logger.info("GoWitness: Database empty or unavailable, using httpx data directly for ROI scoring")
+            
+            for httpx_data in httpx_data_list:
+                url = httpx_data.get('url', '')
+                status_code = httpx_data.get('status-code', 200)
+                title = httpx_data.get('title', '')
+                
+                if not url:
+                    continue
+                
+                roi_score = self.calculate_roi_score(httpx_data)
+                
+                self.screenshots.append({
+                    'url': url,
+                    'status_code': status_code,
+                    'title': title,
+                    'roi_score': roi_score
+                })
+                
+                scored_results.append({
+                    'url': url,
+                    'status_code': status_code,
+                    'title': title,
+                    'roi_score': roi_score
+                })
+        
+        if scored_results:
+            # Sort by ROI score descending
+            scored_results.sort(key=lambda x: -x['roi_score'])
+            
+            # Save scored results
+            scored_results_file = os.path.join(self.scan_dir, 'gowitness_scored_results.json')
+            with open(scored_results_file, 'w', encoding='utf-8') as f:
+                json.dump(scored_results, f, indent=2)
+            
+            self.logger.info(f"GoWitness: Processed {len(self.screenshots)} URLs with ROI scores")
+            self.logger.info(f"GoWitness: Top scored URLs:")
+            for i, result in enumerate(scored_results[:5], 1):
+                self.logger.info(f"  {i}. {result['url']} - ROI: {result['roi_score']}")
+            
+            self.tools_status['gowitness']['count'] = len(self.screenshots)
         else:
-            self.logger.warning(f"GoWitness: Database not found at {gowitness_db}")
+            self.logger.warning("GoWitness: No data available for ROI scoring")
+            self.tools_status['gowitness']['count'] = 0
+    
+    def _urls_match(self, url1, url2):
+        """Check if two URLs represent the same domain/server"""
+        # Normalize URLs
+        url1 = url1.rstrip('/').lower()
+        url2 = url2.rstrip('/').lower()
+        
+        # Exact match
+        if url1 == url2:
+            return True
+        
+        # Remove default ports
+        url1_no_port = url1.replace(':443', '').replace(':80', '')
+        url2_no_port = url2.replace(':443', '').replace(':80', '')
+        
+        if url1_no_port == url2_no_port:
+            return True
+        
+        # Extract domain/host from both URLs
+        try:
+            from urllib.parse import urlparse
+            
+            parsed1 = urlparse(url1)
+            parsed2 = urlparse(url2)
+            
+            # Get hostname (without port)
+            host1 = parsed1.hostname or parsed1.netloc.split(':')[0]
+            host2 = parsed2.hostname or parsed2.netloc.split(':')[0]
+            
+            # If hostnames match, these are same server
+            if host1 and host2 and host1.lower() == host2.lower():
+                return True
+        except:
+            pass
+        
+        return False
     
     def run(self):
         """Run the full scanning process"""
@@ -446,7 +755,7 @@ class DomScoutScanner:
     
     def run_enumeration(self):
         """Run parallel subdomain enumeration"""
-        tools = ['subfinder', 'findomain', 'assetfinder', 'sublist3r', 'crtsh']
+        tools = ['subfinder', 'findomain', 'assetfinder', 'sublist3r']
         
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.run_single_tool, tool) for tool in tools]
@@ -469,7 +778,7 @@ class DomScoutScanner:
         """Merge and deduplicate subdomains"""
         unique_subdomains = set()
         
-        for filename in ["subfinder-rescursive.txt", "findomain.txt", "assetfinder.txt", "sublist3r.txt", "crtsh.txt"]:
+        for filename in ["subfinder-rescursive.txt", "findomain.txt", "assetfinder.txt", "sublist3r.txt"]:
             filepath = os.path.join(self.scan_dir, filename)
             if os.path.exists(filepath):
                 try:
@@ -523,8 +832,16 @@ class DomScoutScanner:
             print("HTTPx: live_subs.txt not found or empty")
             return
         
+        # Build user agent option
+        if self.rotate_user_agents:
+            user_agent = self.get_random_user_agent()
+            ua_option = f"-H 'User-Agent: {user_agent}'"
+            self.logger.info(f"HTTPx: Using custom user agent rotation")
+        else:
+            ua_option = "-random-agent"
+        
         # Run httpx with stealth flags to bypass WAFs/Cloudflare
-        # -random-agent: random user agent
+        # -random-agent OR custom UA: user agent
         # -H Custom headers to bypass protections
         # -retries 2: retry failed requests
         # -timeout 10: reasonable timeout
@@ -532,7 +849,7 @@ class DomScoutScanner:
         httpx_cmd = f"""cat {live_subs_file} | httpx-toolkit \
             -silent \
             -json \
-            -random-agent \
+            {ua_option} \
             -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
             -H 'Accept-Language: en-US,en;q=0.5' \
             -H 'Accept-Encoding: gzip, deflate' \
@@ -605,6 +922,13 @@ class DomScoutScanner:
         if not os.path.exists(gau_bin):
             gau_bin = "gau"  # Fallback to PATH
         
+        # Build environment with custom user agent if rotation is enabled
+        env = os.environ.copy()
+        if self.rotate_user_agents:
+            user_agent = self.get_random_user_agent()
+            env['HTTP_USER_AGENT'] = user_agent
+            self.logger.info(f"GAU: Using custom user agent rotation")
+        
         # Run GAU on each domain with stealth settings
         # --blacklist: skip certain extensions
         # --threads: parallel processing
@@ -621,7 +945,8 @@ class DomScoutScanner:
                     capture_output=True,
                     text=True,
                     timeout=120,
-                    cwd=self.scan_dir
+                    cwd=self.scan_dir,
+                    env=env
                 )
                 if result.stdout:
                     for url in result.stdout.strip().split('\n'):
@@ -662,6 +987,14 @@ class DomScoutScanner:
         if not os.path.exists(gospider_bin):
             gospider_bin = "gospider"  # Fallback to PATH
         
+        # Build user agent option
+        if self.rotate_user_agents:
+            user_agent = self.get_random_user_agent()
+            ua_option = f"-H 'User-Agent: {user_agent}'"
+            self.logger.info(f"GoSpider: Using custom user agent rotation")
+        else:
+            ua_option = "-u web"
+        
         # Run gospider with stealth flags
         # -S: sites list file
         # -c: concurrent requests (lower to avoid detection)
@@ -669,10 +1002,10 @@ class DomScoutScanner:
         # --sitemap --robots: crawl sitemap and robots.txt
         # -m: timeout in seconds
         # -q: quiet mode
-        # -u web: random web user-agent
+        # -u web OR custom UA: user-agent
         # --blacklist: regex pattern to filter static files
         # -a: enable other sources (Archive.org, CommonCrawl, etc.)
-        gospider_cmd = f"{gospider_bin} -S {alive_file} -c 5 -d 3 --sitemap --robots -m 20 -q -u web --blacklist '\\.(css|png|jpeg|jpg|svg|img|gif|mp4|flv|ogv|webm|webp|woff|woff2|ttf|eot|otf|ico)$' -a"
+        gospider_cmd = f"{gospider_bin} -S {alive_file} -c 5 -d 3 --sitemap --robots -m 20 -q {ua_option} --blacklist '\\.(css|png|jpeg|jpg|svg|img|gif|mp4|flv|ogv|webm|webp|woff|woff2|ttf|eot|otf|ico)$' -a"
         
         try:
             self.logger.debug(f"GoSpider: Running command: {gospider_cmd}")
@@ -779,11 +1112,18 @@ class DomScoutScanner:
             gowitness_bin = "gowitness"  # Fallback to PATH
             self.logger.debug(f"GoWitness: Using PATH fallback for gowitness binary")
         
+        # Select user agent
+        if self.rotate_user_agents:
+            user_agent = self.get_random_user_agent()
+            self.logger.info(f"GoWitness: Using custom user agent rotation")
+        else:
+            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        
         # GoWitness with stealth flags
         # --screenshot-path: where to save screenshots
         # --write-db: output to SQLite database (needed for results)
         # --delay: delay between requests  
-        # --delay: timeout for page load
+        # --timeout: timeout for page load
         # --threads: parallel processing
         # --chrome-user-agent: custom user agent  
         gowitness_cmd = (
@@ -794,7 +1134,7 @@ class DomScoutScanner:
             f"--screenshot-path {scan_screenshots_dir}/ "
             f"--write-db "
             f"--write-db-uri sqlite://{gowitness_db} "
-            f"--chrome-user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'"
+            f"--chrome-user-agent '{user_agent}'"
         )
         
         chrome_path = self.get_chrome_path()

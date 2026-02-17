@@ -68,16 +68,6 @@
             @view-results="viewToolResults('sublist3r')"
           />
 
-          <!-- Tool Card: crt.sh -->
-          <ToolCard
-            title="crt.sh"
-            description="Certificate transparency logs"
-            :status="tools.crtsh.status"
-            :count="tools.crtsh.count"
-            @run="runTool('crtsh')"
-            @view-results="viewToolResults('crtsh')"
-          />
-
           <!-- Tool Card: Merge -->
           <ToolCard
             title="Merge"
@@ -214,7 +204,6 @@ export default {
         findomain: { status: 'idle', count: 0 },
         assetfinder: { status: 'idle', count: 0 },
         sublist3r: { status: 'idle', count: 0 },
-        crtsh: { status: 'idle', count: 0 },
         merge: { status: 'idle', count: 0 },
         dnsx: { status: 'idle', count: 0 },
         httpx: { status: 'idle', count: 0 },
@@ -235,8 +224,7 @@ export default {
       return this.tools.subfinder.count > 0 || 
              this.tools.findomain.count > 0 || 
              this.tools.assetfinder.count > 0 ||
-             this.tools.sublist3r.count > 0 ||
-             this.tools.crtsh.count > 0
+             this.tools.sublist3r.count > 0
     },
     hasMergeResults() {
       return this.tools.merge.count > 0
