@@ -4,12 +4,19 @@ import os
 import time
 import concurrent.futures
 import shutil
+import tempfile
 import platform
 import json
 import sqlite3
 import logging
 import sys
 import random
+from urllib.parse import urlparse
+
+IMAGE_EXTENSIONS = {
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+    '.bmp', '.ico', '.tif', '.tiff', '.avif', '.heic', '.heif'
+}
 
 
 # Configure logging to output to both console and a log file
@@ -114,20 +121,22 @@ def setup_logging(scan_id):
 
 
 class DomScoutScanner:
-    def __init__(self, scan_id, target, rate_limit, resolvers_file, screenshots_dir, rotate_user_agents=False):
+    def __init__(self, scan_id, target, rate_limit, resolvers_file, screenshots_dir, rotate_user_agents=False, temp_scans_dir=None):
         self.scan_id = scan_id
         self.target = target
         self.rate_limit = rate_limit
         self.resolvers_file = resolvers_file
         self.screenshots_dir = screenshots_dir
         self.rotate_user_agents = rotate_user_agents
+        self.temp_scans_dir = temp_scans_dir or os.path.join(tempfile.gettempdir(), 'domscout_scans')
         
         # Setup logging for this scan
         self.logger = setup_logging(scan_id)
         self.logger.info(f"=== SCAN STARTED for {target} ===")
         
         # Create scan-specific directory
-        self.scan_dir = os.path.join(os.path.dirname(screenshots_dir), f'scan_{scan_id}')
+        os.makedirs(self.temp_scans_dir, exist_ok=True)
+        self.scan_dir = os.path.join(self.temp_scans_dir, f'scan_{scan_id}')
         os.makedirs(self.scan_dir, exist_ok=True)
         self.logger.debug(f"Scan directory: {self.scan_dir}")
         
@@ -173,7 +182,10 @@ class DomScoutScanner:
             os.path.join(self.scan_dir, "alive_webservices.txt"),
             os.path.join(self.scan_dir, "gau_urls.txt"),
             os.path.join(self.scan_dir, "gospider_urls.txt"),
-            os.path.join(self.scan_dir, "all_urls_merged.txt")
+            os.path.join(self.scan_dir, "all_urls_merged.txt"),
+            os.path.join(self.scan_dir, "httpx_output.json"),
+            os.path.join(self.scan_dir, "httpx_enriched_output.json"),
+            os.path.join(self.scan_dir, "gowitness_scored_results.json")
         ]
     
     def update_progress(self, step, message):
@@ -499,11 +511,16 @@ class DomScoutScanner:
                             data = json.loads(line)
                             if 'url' in data:
                                 url = data['url']
+                                technologies = data.get('tech') or data.get('technologies') or []
+                                if isinstance(technologies, str):
+                                    technologies = [item.strip() for item in technologies.split(',') if item.strip()]
                                 self.urls.append({
                                     'url': url,
-                                    'status_code': data.get('status_code'),
+                                    'status_code': data.get('status_code') or data.get('status-code'),
                                     'title': data.get('title'),
-                                    'content_length': data.get('content_length')
+                                    'webserver': data.get('webserver'),
+                                    'technologies': technologies,
+                                    'content_length': data.get('content_length') or data.get('content-length')
                                 })
                                 alive_urls.append(url)
                         except json.JSONDecodeError:
@@ -731,6 +748,9 @@ class DomScoutScanner:
             # Step 6: Merge all URLs
             self.update_progress(6, "Merging all URLs...")
             self.run_single_tool('merge2')
+
+            # Enrich merged URLs with per-URL metadata (status/title/server/tech)
+            self.enrich_merged_urls_metadata()
             
             # Step 7: Take screenshots
             self.update_progress(7, "Taking screenshots with gowitness...")
@@ -739,12 +759,6 @@ class DomScoutScanner:
             # Step 8: Parse results
             self.update_progress(8, "Processing results...")
             self.parse_results()
-            
-            # Cleanup
-            self.cleanup()
-            
-            # Auto-delete all temporary .txt files after full scan completion
-            self.cleanup_txt_files()
             
             self.duration = int(time.time() - self.start_time)
             self.update_progress(self.total_steps, "Completed!")
@@ -849,6 +863,7 @@ class DomScoutScanner:
         httpx_cmd = f"""cat {live_subs_file} | httpx-toolkit \
             -silent \
             -json \
+            -td \
             {ua_option} \
             -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
             -H 'Accept-Language: en-US,en;q=0.5' \
@@ -1052,7 +1067,8 @@ class DomScoutScanner:
     
     def _run_merge2(self):
         """Merge all URLs from httpx, GAU, and gospider"""
-        all_urls = set()
+        canonical_map = {}
+        filtered_images = 0
         
         # Files to merge
         url_files = [
@@ -1068,18 +1084,161 @@ class DomScoutScanner:
                         for line in f:
                             url = line.strip()
                             if url:
-                                all_urls.add(url)
+                                if self._is_image_url(url):
+                                    filtered_images += 1
+                                    continue
+
+                                canonical = self._canonicalize_url_for_dedupe(url)
+                                existing = canonical_map.get(canonical)
+                                if existing is None:
+                                    canonical_map[canonical] = url
+                                elif self._is_better_url_candidate(url, existing):
+                                    canonical_map[canonical] = url
                 except Exception as e:
                     print(f"Error reading {filepath}: {e}")
         
         # Save merged URLs
         merged_file = os.path.join(self.scan_dir, "all_urls_merged.txt")
         with open(merged_file, 'w') as f:
-            for url in sorted(all_urls):
+            for url in sorted(canonical_map.values()):
                 f.write(f"{url}\n")
+
+        if filtered_images:
+            self.logger.info(f"Merge2: filtered out {filtered_images} image URLs")
         
-        self.tools_status['merge2']['count'] = len(all_urls)
-        return len(all_urls)
+        self.tools_status['merge2']['count'] = len(canonical_map)
+        return len(canonical_map)
+
+    def _is_image_url(self, url):
+        """Return True when URL path points to an image asset."""
+        try:
+            parsed = urlparse(url)
+            path = (parsed.path or '').lower()
+            return any(path.endswith(ext) for ext in IMAGE_EXTENSIONS)
+        except Exception:
+            lowered = url.lower()
+            return any(lowered.split('?', 1)[0].endswith(ext) for ext in IMAGE_EXTENSIONS)
+
+    def _canonicalize_url_for_dedupe(self, url):
+        """Canonicalize URL for deduplication, ignoring query/fragment differences."""
+        try:
+            parsed = urlparse(url)
+            scheme = (parsed.scheme or 'https').lower()
+            host = (parsed.hostname or '').lower()
+            port = parsed.port
+
+            if (scheme == 'https' and port == 443) or (scheme == 'http' and port == 80):
+                port = None
+
+            netloc = host if not port else f"{host}:{port}"
+            path = parsed.path or '/'
+            if path != '/' and path.endswith('/'):
+                path = path.rstrip('/')
+
+            return f"{scheme}://{netloc}{path}"
+        except Exception:
+            return url.strip().lower()
+
+    def _is_better_url_candidate(self, candidate, current):
+        """Pick the better representative URL for a canonical URL group."""
+        try:
+            cand = urlparse(candidate)
+            curr = urlparse(current)
+
+            cand_has_query = bool(cand.query)
+            curr_has_query = bool(curr.query)
+            if cand_has_query != curr_has_query:
+                return not cand_has_query
+
+            cand_len = len(candidate)
+            curr_len = len(current)
+            if cand_len != curr_len:
+                return cand_len < curr_len
+
+            if (cand.scheme or '').lower() != (curr.scheme or '').lower():
+                return (cand.scheme or '').lower() == 'https'
+
+            return candidate < current
+        except Exception:
+            return len(candidate) < len(current)
+
+    def enrich_merged_urls_metadata(self):
+        """Run httpx over merged URLs to capture richer per-URL metadata."""
+        merged_file = os.path.join(self.scan_dir, "all_urls_merged.txt")
+        enriched_json = os.path.join(self.scan_dir, "httpx_enriched_output.json")
+
+        if not os.path.exists(merged_file) or os.path.getsize(merged_file) == 0:
+            self.logger.warning("URL enrichment skipped: all_urls_merged.txt missing or empty")
+            return
+
+        if self.rotate_user_agents:
+            user_agent = self.get_random_user_agent()
+            ua_option = f"-H 'User-Agent: {user_agent}'"
+        else:
+            ua_option = "-random-agent"
+
+        enrich_cmd = f"""cat {merged_file} | httpx-toolkit \
+            -silent \
+            -json \
+            -td \
+            -title \
+            -server \
+            -cl \
+            {ua_option} \
+            -retries 2 \
+            -timeout 10 \
+            -rl {self.rate_limit} \
+            -o {enriched_json}"""
+
+        self.logger.info("URL enrichment: running httpx over merged URLs")
+        try:
+            result = subprocess.run(enrich_cmd, shell=True, capture_output=True, text=True, cwd=self.scan_dir)
+            self.logger.info(f"URL enrichment: httpx exit code {result.returncode}")
+            if result.stderr:
+                self.logger.debug(f"URL enrichment stderr: {result.stderr[:400]}")
+        except Exception as e:
+            self.logger.error(f"URL enrichment error: {e}")
+            return
+
+        if not os.path.exists(enriched_json):
+            self.logger.warning("URL enrichment output not generated")
+            return
+
+        enriched_urls = []
+        try:
+            with open(enriched_json, 'r') as f:
+                for line in f:
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    url = data.get('url')
+                    if not url:
+                        continue
+
+                    technologies = data.get('tech') or data.get('technologies') or []
+                    if isinstance(technologies, str):
+                        technologies = [item.strip() for item in technologies.split(',') if item.strip()]
+
+                    enriched_urls.append({
+                        'url': url,
+                        'status_code': data.get('status_code') or data.get('status-code'),
+                        'title': data.get('title'),
+                        'webserver': data.get('webserver'),
+                        'technologies': technologies,
+                        'content_length': data.get('content_length') or data.get('content-length')
+                    })
+        except Exception as e:
+            self.logger.error(f"URL enrichment parse error: {e}")
+            return
+
+        if enriched_urls:
+            by_url = {item['url']: item for item in self.urls if item.get('url')}
+            for item in enriched_urls:
+                by_url[item['url']] = item
+            self.urls = list(by_url.values())
+            self.logger.info(f"URL enrichment: metadata captured for {len(enriched_urls)} URLs")
     
     def run_gowitness(self):
         """Run gowitness to capture screenshots with stealth settings"""
@@ -1170,52 +1329,94 @@ class DomScoutScanner:
     
     def parse_results(self):
         """Parse all results"""
+        urls_by_key = {}
+        for existing in self.urls:
+            url = existing.get('url')
+            if url:
+                urls_by_key[url] = dict(existing)
+
         # Parse URLs from merged file
         merged_file = os.path.join(self.scan_dir, "all_urls_merged.txt")
         if os.path.exists(merged_file):
             with open(merged_file, 'r') as f:
                 for line in f:
                     url = line.strip()
-                    if url:
-                        self.urls.append({'url': url, 'status_code': None})
-        
-        # Parse gowitness database for screenshots
-        gowitness_db = os.path.join(self.scan_dir, "gowitness.sqlite3")
-        if os.path.exists(gowitness_db):
+                    if url and url not in urls_by_key:
+                        urls_by_key[url] = {
+                            'url': url,
+                            'status_code': None,
+                            'title': None,
+                            'webserver': None,
+                            'technologies': [],
+                            'content_length': None
+                        }
+
+        self.urls = list(urls_by_key.values())
+
+        # Enrich URLs with gowitness metadata (status/title) by exact URL first, then by host
+        screenshot_by_url = {}
+        screenshot_by_host = {}
+
+        for screenshot in self.screenshots:
+            screenshot_url = screenshot.get('url')
+            if not screenshot_url:
+                continue
+
+            # Prefer richer screenshot entries (status/title/filename)
+            existing_exact = screenshot_by_url.get(screenshot_url)
+            if existing_exact is None:
+                screenshot_by_url[screenshot_url] = screenshot
+            else:
+                old_score = int(existing_exact.get('status_code') is not None) + int(bool(existing_exact.get('title'))) + int(bool(existing_exact.get('filename')))
+                new_score = int(screenshot.get('status_code') is not None) + int(bool(screenshot.get('title'))) + int(bool(screenshot.get('filename')))
+                if new_score > old_score:
+                    screenshot_by_url[screenshot_url] = screenshot
+
             try:
-                conn = sqlite3.connect(gowitness_db)
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                
-                rows = cursor.execute(
-                    'SELECT url, final_url, response_code, response_code_text, title, filename FROM urls'
-                ).fetchall()
-                
-                for row in rows:
-                    self.screenshots.append({
-                        'url': row['url'] or row['final_url'],
-                        'status_code': row['response_code'],
-                        'title': row['title'],
-                        'filename': os.path.join(self.scan_id, row['filename']),
-                        'headers': {}
-                    })
-                
-                # Update URLs with status codes
-                for url_data in self.urls:
-                    for screenshot in self.screenshots:
-                        if url_data['url'] in screenshot['url'] or screenshot['url'] in url_data['url']:
-                            url_data['status_code'] = screenshot['status_code']
-                            break
-                
-                conn.close()
-            except Exception as e:
-                print(f"Error parsing gowitness database: {e}")
+                from urllib.parse import urlparse
+                host = (urlparse(screenshot_url).hostname or '').lower()
+            except Exception:
+                host = ''
+
+            if not host:
+                continue
+
+            existing_host = screenshot_by_host.get(host)
+            if existing_host is None:
+                screenshot_by_host[host] = screenshot
+            else:
+                old_score = int(existing_host.get('status_code') is not None) + int(bool(existing_host.get('title')))
+                new_score = int(screenshot.get('status_code') is not None) + int(bool(screenshot.get('title')))
+                if new_score > old_score:
+                    screenshot_by_host[host] = screenshot
+
+        for url_data in self.urls:
+            url = url_data.get('url')
+            if not url:
+                continue
+
+            exact = screenshot_by_url.get(url)
+            host_match = None
+            try:
+                from urllib.parse import urlparse
+                host = (urlparse(url).hostname or '').lower()
+                if host:
+                    host_match = screenshot_by_host.get(host)
+            except Exception:
+                host = ''
+
+            best = exact or host_match
+            if not best:
+                continue
+
+            if url_data.get('status_code') is None and best.get('status_code') is not None:
+                url_data['status_code'] = best.get('status_code')
+            if not url_data.get('title') and best.get('title'):
+                url_data['title'] = best.get('title')
     
     def cleanup(self):
         """Clean up temporary files"""
-        # Note: We keep .txt files until the full scan is complete
-        # They will be deleted by cleanup_txt_files()
-        pass
+        self.cleanup_temp_artifacts()
     
     def cleanup_txt_files(self):
         """Delete all residual .txt files after scan completion"""
@@ -1235,3 +1436,14 @@ class DomScoutScanner:
                 print(f"Deleted: {gowitness_db}")
             except OSError as e:
                 print(f"Error deleting gowitness db: {e}")
+
+    def cleanup_temp_artifacts(self):
+        """Delete all temporary files and remove temporary scan directory."""
+        self.cleanup_txt_files()
+
+        if os.path.exists(self.scan_dir):
+            try:
+                shutil.rmtree(self.scan_dir)
+                self.logger.debug(f"Deleted temporary scan directory: {self.scan_dir}")
+            except OSError as e:
+                self.logger.error(f"Error deleting temporary scan directory {self.scan_dir}: {e}")

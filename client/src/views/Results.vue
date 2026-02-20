@@ -98,12 +98,13 @@
               <th class="col-status">Status</th>
               <th class="col-url">URL</th>
               <th class="col-title">Title</th>
+              <th class="col-tech">Technologies</th>
               <th class="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="(result, index) in filteredResults"
+              v-for="(result, index) in paginatedResults"
               :key="index"
               class="result-row"
             >
@@ -154,6 +155,18 @@
                   {{ result.title || '-' }}
                 </span>
               </td>
+              <td class="col-tech">
+                <div v-if="result.technologies && result.technologies.length" class="row-tech-list">
+                  <span
+                    v-for="tech in result.technologies"
+                    :key="result.url + tech"
+                    class="row-tech-chip"
+                  >
+                    {{ tech }}
+                  </span>
+                </div>
+                <span v-else class="page-title">-</span>
+              </td>
               <td class="col-actions">
                 <button
                   class="btn-action"
@@ -174,6 +187,20 @@
             </tr>
           </tbody>
         </table>
+        <div class="pagination-bar">
+          <span class="pagination-info">
+            Showing {{ pageStart }}-{{ pageEnd }} of {{ filteredResults.length }}
+          </span>
+          <div class="pagination-controls">
+            <button class="pagination-btn" :disabled="currentPage === 1" @click="goToPreviousPage">
+              Prev
+            </button>
+            <span class="pagination-page">Page {{ currentPage }} / {{ totalPages }}</span>
+            <button class="pagination-btn" :disabled="currentPage >= totalPages" @click="goToNextPage">
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- No Results Message -->
@@ -237,6 +264,25 @@
                 {{ selectedResult.url }}
               </a>
             </div>
+            <div class="modal-meta-grid">
+              <div class="modal-meta-item">
+                <strong>Status Code:</strong>
+                <span>{{ selectedResult.status_code || '---' }}</span>
+              </div>
+              <div class="modal-meta-item modal-tech-meta">
+                <strong>Technologies:</strong>
+                <div v-if="selectedResult.technologies && selectedResult.technologies.length" class="row-tech-list">
+                  <span
+                    v-for="tech in selectedResult.technologies"
+                    :key="selectedResult.url + '-modal-' + tech"
+                    class="row-tech-chip"
+                  >
+                    {{ tech }}
+                  </span>
+                </div>
+                <span v-else>-</span>
+              </div>
+            </div>
             <div v-if="selectedResult.title" class="modal-title">
               <strong>Title:</strong> {{ selectedResult.title }}
             </div>
@@ -276,7 +322,9 @@ export default {
       expandedSections: {
         subdomains: false
       },
-      pollInterval: null
+      pollInterval: null,
+      currentPage: 1,
+      pageSize: 5
     }
   },
   computed: {
@@ -308,10 +356,39 @@ export default {
 
       return filtered
     },
+    totalPages() {
+      const pages = Math.ceil(this.filteredResults.length / this.pageSize)
+      return pages > 0 ? pages : 1
+    },
+    paginatedResults() {
+      const start = (this.currentPage - 1) * this.pageSize
+      return this.filteredResults.slice(start, start + this.pageSize)
+    },
+    pageStart() {
+      if (!this.filteredResults.length) return 0
+      return (this.currentPage - 1) * this.pageSize + 1
+    },
+    pageEnd() {
+      if (!this.filteredResults.length) return 0
+      return Math.min(this.currentPage * this.pageSize, this.filteredResults.length)
+    },
     filteredSubdomains() {
       if (!this.subdomainSearch) return this.subdomains
       const search = this.subdomainSearch.toLowerCase()
       return this.subdomains.filter(s => s.toLowerCase().includes(search))
+    }
+  },
+  watch: {
+    searchQuery() {
+      this.currentPage = 1
+    },
+    statusFilter() {
+      this.currentPage = 1
+    },
+    filteredResults() {
+      if (this.currentPage > this.totalPages) {
+        this.currentPage = this.totalPages
+      }
     }
   },
   mounted() {
@@ -363,20 +440,124 @@ export default {
       // Create a map of screenshots by URL
       const screenshotMap = {}
       this.screenshots.forEach(ss => {
-        screenshotMap[ss.url] = ss
+        if (!ss.url) return
+        const existing = screenshotMap[ss.url]
+        if (!existing) {
+          screenshotMap[ss.url] = ss
+          return
+        }
+
+        const oldScore = Number(existing.status_code != null) + Number(Boolean(existing.title)) + Number(Boolean(existing.filename))
+        const newScore = Number(ss.status_code != null) + Number(Boolean(ss.title)) + Number(Boolean(ss.filename))
+        if (newScore >= oldScore) {
+          screenshotMap[ss.url] = ss
+        }
+      })
+
+      // Build host-level metadata map from URLs that already have metadata
+      const hostMetadataMap = {}
+      this.urls.forEach(urlData => {
+        const host = this.extractHostname(urlData.url)
+        if (!host) return
+
+        if (!hostMetadataMap[host]) {
+          hostMetadataMap[host] = {
+            status_code: null,
+            webserver: null,
+            technologies: [],
+            content_length: null,
+            title: null
+          }
+        }
+
+        const current = hostMetadataMap[host]
+        if (urlData.status_code != null && current.status_code == null) {
+          current.status_code = urlData.status_code
+        }
+        if (urlData.webserver && !current.webserver) {
+          current.webserver = urlData.webserver
+        }
+        if (urlData.title && !current.title) {
+          current.title = urlData.title
+        }
+        if (urlData.content_length != null && current.content_length == null) {
+          current.content_length = urlData.content_length
+        }
+
+        const technologies = Array.isArray(urlData.technologies) ? urlData.technologies : []
+        if (technologies.length) {
+          const merged = new Set([...(current.technologies || []), ...technologies])
+          current.technologies = Array.from(merged)
+        }
+      })
+
+      // Build host-level fallback from screenshots for status/title
+      const screenshotHostMap = {}
+      this.screenshots.forEach(ss => {
+        const host = this.extractHostname(ss.url)
+        if (!host) return
+        const candidate = {
+          status_code: ss.status_code || null,
+          title: ss.title || null,
+          filename: ss.filename || null
+        }
+        const current = screenshotHostMap[host]
+        if (!current) {
+          screenshotHostMap[host] = candidate
+          return
+        }
+        const oldScore = Number(current.status_code != null) + Number(Boolean(current.title)) + Number(Boolean(current.filename))
+        const newScore = Number(candidate.status_code != null) + Number(Boolean(candidate.title)) + Number(Boolean(candidate.filename))
+        if (newScore >= oldScore) {
+          screenshotHostMap[host] = candidate
+        }
       })
 
       // Build results by merging URLs with their screenshots
-      this.results = this.urls.map(urlData => {
+      const mergedResults = this.urls.map(urlData => {
         const screenshot = screenshotMap[urlData.url]
+        const host = this.extractHostname(urlData.url)
+        const hostMetadata = host ? hostMetadataMap[host] : null
+        const screenshotHostMetadata = host ? screenshotHostMap[host] : null
+
+        const technologies = Array.isArray(urlData.technologies) && urlData.technologies.length
+          ? urlData.technologies
+          : (hostMetadata?.technologies || [])
+
+        const finalStatusCode =
+          urlData.status_code ??
+          (screenshot ? screenshot.status_code : null) ??
+          (hostMetadata ? hostMetadata.status_code : null) ??
+          (screenshotHostMetadata ? screenshotHostMetadata.status_code : null)
+
+        const finalTitle =
+          (screenshot ? screenshot.title : null) ||
+          urlData.title ||
+          (hostMetadata ? hostMetadata.title : null) ||
+          (screenshotHostMetadata ? screenshotHostMetadata.title : null)
+
         return {
           url: urlData.url,
-          status_code: urlData.status_code,
-          title: screenshot ? screenshot.title : (urlData.title || null),
+          status_code: finalStatusCode,
+          title: finalTitle,
+          webserver: urlData.webserver || (hostMetadata ? hostMetadata.webserver : null),
+          technologies,
+          content_length: urlData.content_length || (hostMetadata ? hostMetadata.content_length : null),
           screenshot: screenshot || null,
           roi_score: screenshot ? screenshot.roi_score : 50
         }
       })
+
+      const dedupedMap = {}
+      mergedResults.forEach(result => {
+        const key = this.canonicalizeUrl(result.url)
+        const existing = dedupedMap[key]
+        if (!existing || this.isBetterResultCandidate(result, existing)) {
+          dedupedMap[key] = result
+        }
+      })
+
+      this.results = Object.values(dedupedMap)
 
       // Sort by ROI score (descending), then by status code
       this.results.sort((a, b) => {
@@ -389,6 +570,8 @@ export default {
         const codeB = b.status_code || 999
         return codeA - codeB
       })
+
+      this.currentPage = 1
     },
     startPolling() {
       this.pollInterval = setInterval(() => {
@@ -433,6 +616,69 @@ export default {
       if (score >= 100) return 'info'      // Blue - Medium ROI
       if (score >= 75) return 'success'    // Green - Low-Medium ROI
       return 'secondary'                   // Gray - Low ROI
+    },
+    extractHostname(url) {
+      if (!url) return null
+      try {
+        const normalized = url.startsWith('http://') || url.startsWith('https://')
+          ? url
+          : `https://${url}`
+        return new URL(normalized).hostname.toLowerCase()
+      } catch {
+        return null
+      }
+    },
+    canonicalizeUrl(url) {
+      if (!url) return ''
+      try {
+        const normalized = url.startsWith('http://') || url.startsWith('https://')
+          ? url
+          : `https://${url}`
+        const parsed = new URL(normalized)
+        const scheme = parsed.protocol.replace(':', '').toLowerCase()
+        const host = parsed.hostname.toLowerCase()
+        const port = parsed.port
+        const defaultPort = (scheme === 'https' && port === '443') || (scheme === 'http' && port === '80')
+        const netloc = port && !defaultPort ? `${host}:${port}` : host
+
+        let path = parsed.pathname || '/'
+        if (path !== '/' && path.endsWith('/')) {
+          path = path.replace(/\/+$/, '')
+        }
+
+        return `${scheme}://${netloc}${path}`
+      } catch {
+        return url.trim().toLowerCase()
+      }
+    },
+    isBetterResultCandidate(candidate, current) {
+      const candidateHasQuery = candidate.url && candidate.url.includes('?')
+      const currentHasQuery = current.url && current.url.includes('?')
+      if (candidateHasQuery !== currentHasQuery) {
+        return !candidateHasQuery
+      }
+
+      const candidateMetaScore = Number(candidate.status_code != null) + Number(Boolean(candidate.title)) + Number((candidate.technologies || []).length > 0)
+      const currentMetaScore = Number(current.status_code != null) + Number(Boolean(current.title)) + Number((current.technologies || []).length > 0)
+      if (candidateMetaScore !== currentMetaScore) {
+        return candidateMetaScore > currentMetaScore
+      }
+
+      if ((candidate.url || '').length !== (current.url || '').length) {
+        return (candidate.url || '').length < (current.url || '').length
+      }
+
+      return (candidate.url || '') < (current.url || '')
+    },
+    goToPreviousPage() {
+      if (this.currentPage > 1) {
+        this.currentPage -= 1
+      }
+    },
+    goToNextPage() {
+      if (this.currentPage < this.totalPages) {
+        this.currentPage += 1
+      }
     }
   }
 }
@@ -661,6 +907,45 @@ export default {
   vertical-align: middle;
 }
 
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+}
+
+.pagination-info {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pagination-page {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.pagination-btn {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pagination-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Table Columns */
 .col-roi {
   width: 100px;
@@ -719,9 +1004,28 @@ export default {
   min-width: 200px;
 }
 
+.col-tech {
+  min-width: 220px;
+}
+
 .col-actions {
   width: 120px;
   text-align: center;
+}
+
+.row-tech-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.row-tech-chip {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-primary);
 }
 
 /* Screenshot Thumbnail */
@@ -1022,6 +1326,26 @@ export default {
 .modal-title {
   font-size: 14px;
   color: var(--text-secondary);
+}
+
+.modal-meta-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.modal-meta-item {
+  font-size: 14px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modal-tech-meta {
+  align-items: flex-start;
 }
 
 @keyframes fadeIn {

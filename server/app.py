@@ -4,6 +4,7 @@ import json
 import time
 import threading
 import sqlite3
+import tempfile
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -22,13 +23,20 @@ CORS(app)
 # Database configuration
 DB_PATH = os.path.join(os.path.dirname(__file__), 'domscout.db')
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'screenshots')
+TEMP_SCANS_DIR = os.path.join(tempfile.gettempdir(), 'domscout_scans')
 RESOLVERS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'resolvers.txt')
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), 'settings.json')
 SUBFINDER_CONFIG_PATH = os.path.expanduser('~/.config/subfinder/provider-config.yaml')
 
+TOOL_NAMES = [
+    'subfinder', 'findomain', 'assetfinder', 'sublist3r',
+    'merge', 'dnsx', 'httpx', 'gau', 'gospider', 'merge2', 'gowitness'
+]
+
 # Ensure directories exist
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+os.makedirs(TEMP_SCANS_DIR, exist_ok=True)
 
 # 50 legitimate user agents for rotation
 USER_AGENTS = [
@@ -101,6 +109,7 @@ USER_AGENTS = [
 
 # Global scan tracking
 active_scans = {}
+deleted_scans = set()
 
 
 def init_db():
@@ -138,6 +147,10 @@ def init_db():
             scan_id TEXT NOT NULL,
             url TEXT NOT NULL,
             status_code INTEGER,
+            title TEXT,
+            webserver TEXT,
+            technologies TEXT,
+            content_length INTEGER,
             FOREIGN KEY (scan_id) REFERENCES scans(id)
         )
     ''')
@@ -156,6 +169,44 @@ def init_db():
             FOREIGN KEY (scan_id) REFERENCES scans(id)
         )
     ''')
+
+    # Tool status cache table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tool_status (
+            scan_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            count INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scan_id, tool_name),
+            FOREIGN KEY (scan_id) REFERENCES scans(id)
+        )
+    ''')
+
+    # Tool results cache table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tool_results (
+            scan_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            results_json TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scan_id, tool_name),
+            FOREIGN KEY (scan_id) REFERENCES scans(id)
+        )
+    ''')
+
+    # Lightweight schema migration for existing databases
+    url_columns = {
+        row[1] for row in cursor.execute('PRAGMA table_info(urls)').fetchall()
+    }
+    if 'title' not in url_columns:
+        cursor.execute('ALTER TABLE urls ADD COLUMN title TEXT')
+    if 'webserver' not in url_columns:
+        cursor.execute('ALTER TABLE urls ADD COLUMN webserver TEXT')
+    if 'technologies' not in url_columns:
+        cursor.execute('ALTER TABLE urls ADD COLUMN technologies TEXT')
+    if 'content_length' not in url_columns:
+        cursor.execute('ALTER TABLE urls ADD COLUMN content_length INTEGER')
     
     conn.commit()
     conn.close()
@@ -165,7 +216,147 @@ def get_db_connection():
     """Get database connection"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
     return conn
+
+
+def scan_exists(conn, scan_id):
+    """Check whether scan record still exists."""
+    cursor = conn.cursor()
+    row = cursor.execute('SELECT 1 FROM scans WHERE id = ?', (scan_id,)).fetchone()
+    return row is not None
+
+
+def upsert_tool_status(conn, scan_id, tool_name, status, count):
+    """Insert or update tool status in SQLite cache."""
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+        INSERT INTO tool_status (scan_id, tool_name, status, count, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(scan_id, tool_name) DO UPDATE SET
+            status=excluded.status,
+            count=excluded.count,
+            updated_at=CURRENT_TIMESTAMP
+        ''',
+        (scan_id, tool_name, status, count)
+    )
+
+
+def upsert_tool_results(conn, scan_id, tool_name, results):
+    """Insert or update tool results in SQLite cache."""
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+        INSERT INTO tool_results (scan_id, tool_name, results_json, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(scan_id, tool_name) DO UPDATE SET
+            results_json=excluded.results_json,
+            updated_at=CURRENT_TIMESTAMP
+        ''',
+        (scan_id, tool_name, json.dumps(results))
+    )
+
+
+def load_tool_status_from_db(scan_id):
+    """Load tool status map for a scan from SQLite cache."""
+    status_map = {tool: {'status': 'idle', 'count': 0} for tool in TOOL_NAMES}
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    rows = cursor.execute(
+        'SELECT tool_name, status, count FROM tool_status WHERE scan_id = ?',
+        (scan_id,)
+    ).fetchall()
+    conn.close()
+
+    for row in rows:
+        tool_name = row['tool_name']
+        if tool_name in status_map:
+            status_map[tool_name] = {
+                'status': row['status'],
+                'count': row['count'] or 0
+            }
+
+    return status_map
+
+
+def load_tool_results_from_db(scan_id, tool_name):
+    """Load tool results array for a scan/tool from SQLite cache."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        'SELECT results_json FROM tool_results WHERE scan_id = ? AND tool_name = ?',
+        (scan_id, tool_name)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return []
+
+    try:
+        return json.loads(row['results_json'])
+    except Exception:
+        return []
+
+
+def save_tool_cache(scanner):
+    """Persist current tool statuses and results for the scan."""
+    conn = get_db_connection()
+    try:
+        for tool_name, data in scanner.get_tools_status().items():
+            upsert_tool_status(
+                conn,
+                scanner.scan_id,
+                tool_name,
+                data.get('status', 'idle'),
+                data.get('count', 0)
+            )
+            upsert_tool_results(
+                conn,
+                scanner.scan_id,
+                tool_name,
+                scanner.get_tool_results(tool_name)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def serialize_technologies(technologies):
+    """Serialize technologies metadata into JSON text."""
+    if technologies is None:
+        return None
+
+    if isinstance(technologies, str):
+        value = technologies.strip()
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return json.dumps(parsed)
+        except Exception:
+            pass
+        return json.dumps([item.strip() for item in value.split(',') if item.strip()])
+
+    if isinstance(technologies, list):
+        return json.dumps([str(item).strip() for item in technologies if str(item).strip()])
+
+    return None
+
+
+def parse_technologies(technologies_json):
+    """Parse technologies JSON text into a normalized list."""
+    if not technologies_json:
+        return []
+    try:
+        parsed = json.loads(technologies_json)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return []
 
 
 @app.route('/')
@@ -213,7 +404,15 @@ def create_target():
     rotate_ua = settings.get('rotate_user_agents', False)
     
     # Create scanner instance but don't start it
-    scanner = DomScoutScanner(scan_id, domain, rate_limit, RESOLVERS_FILE, SCREENSHOTS_DIR, rotate_ua)
+    scanner = DomScoutScanner(
+        scan_id,
+        domain,
+        rate_limit,
+        RESOLVERS_FILE,
+        SCREENSHOTS_DIR,
+        rotate_ua,
+        TEMP_SCANS_DIR
+    )
     active_scans[scan_id] = scanner
     
     return jsonify({'scan_id': scan_id, 'status': 'created'})
@@ -247,7 +446,15 @@ def start_scan():
     rotate_ua = settings.get('rotate_user_agents', False)
     
     # Start scan in background thread
-    scanner = DomScoutScanner(scan_id, domain, rate_limit, RESOLVERS_FILE, SCREENSHOTS_DIR, rotate_ua)
+    scanner = DomScoutScanner(
+        scan_id,
+        domain,
+        rate_limit,
+        RESOLVERS_FILE,
+        SCREENSHOTS_DIR,
+        rotate_ua,
+        TEMP_SCANS_DIR
+    )
     active_scans[scan_id] = scanner
     
     thread = threading.Thread(target=run_scan, args=(scanner,))
@@ -261,9 +468,16 @@ def run_scan(scanner):
     """Run the scan in background"""
     try:
         scanner.run()
+
+        if scanner.scan_id in deleted_scans:
+            return
+
+        conn = get_db_connection()
+        if not scan_exists(conn, scanner.scan_id):
+            conn.close()
+            return
         
         # Update scan status
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
             'UPDATE scans SET status = ?, completed_at = ?, duration = ? WHERE id = ?',
@@ -273,6 +487,9 @@ def run_scan(scanner):
         
         # Save results to database
         save_scan_results(scanner)
+
+        # Persist per-tool statuses and results in SQLite
+        save_tool_cache(scanner)
         
         conn.close()
     except Exception as e:
@@ -285,12 +502,36 @@ def run_scan(scanner):
         )
         conn.commit()
         conn.close()
+        try:
+            save_tool_cache(scanner)
+        except Exception:
+            pass
+    finally:
+        try:
+            scanner.cleanup_temp_artifacts()
+        except Exception:
+            pass
+
+        if scanner.scan_id in active_scans:
+            del active_scans[scanner.scan_id]
+
+        if scanner.scan_id in deleted_scans:
+            deleted_scans.remove(scanner.scan_id)
 
 
 def save_scan_results(scanner):
     """Save scan results to database"""
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    if scanner.scan_id in deleted_scans or not scan_exists(conn, scanner.scan_id):
+        conn.close()
+        return
+
+    # Replace previous persisted data for idempotency
+    cursor.execute('DELETE FROM subdomains WHERE scan_id = ?', (scanner.scan_id,))
+    cursor.execute('DELETE FROM urls WHERE scan_id = ?', (scanner.scan_id,))
+    cursor.execute('DELETE FROM screenshots WHERE scan_id = ?', (scanner.scan_id,))
     
     # Save subdomains
     for subdomain in scanner.subdomains:
@@ -300,10 +541,42 @@ def save_scan_results(scanner):
         )
     
     # Save URLs
+    by_url = {}
     for url_data in scanner.urls:
+        url = url_data.get('url')
+        if not url:
+            continue
+        if url not in by_url:
+            by_url[url] = {
+                'url': url,
+                'status_code': None,
+                'title': None,
+                'webserver': None,
+                'technologies': None,
+                'content_length': None
+            }
+
+        existing = by_url[url]
+        for key in ['status_code', 'title', 'webserver', 'technologies', 'content_length']:
+            value = url_data.get(key)
+            if value not in (None, '', []):
+                existing[key] = value
+
+    for url_data in by_url.values():
         cursor.execute(
-            'INSERT INTO urls (scan_id, url, status_code) VALUES (?, ?, ?)',
-            (scanner.scan_id, url_data['url'], url_data.get('status_code'))
+            '''
+            INSERT INTO urls (scan_id, url, status_code, title, webserver, technologies, content_length)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                scanner.scan_id,
+                url_data['url'],
+                url_data.get('status_code'),
+                url_data.get('title'),
+                url_data.get('webserver'),
+                serialize_technologies(url_data.get('technologies')),
+                url_data.get('content_length')
+            )
         )
     
     # Save screenshots
@@ -393,13 +666,23 @@ def get_urls(scan_id):
     cursor = conn.cursor()
     
     rows = cursor.execute(
-        'SELECT url, status_code FROM urls WHERE scan_id = ? ORDER BY url',
+        '''
+        SELECT url, status_code, title, webserver, technologies, content_length
+        FROM urls
+        WHERE scan_id = ?
+        ORDER BY url
+        ''',
         (scan_id,)
     ).fetchall()
     
     conn.close()
     
-    urls = [dict(row) for row in rows]
+    urls = []
+    for row in rows:
+        item = dict(row)
+        item['technologies'] = parse_technologies(item.get('technologies'))
+        urls.append(item)
+
     return jsonify({'urls': urls})
 
 
@@ -432,78 +715,21 @@ def get_screenshots(scan_id):
 @app.route('/api/scan/<scan_id>/tools', methods=['GET'])
 def get_tools_status(scan_id):
     """Get the status of individual tools"""
-    scanner = None
-    
     # Try to get scanner from active scans
     if scan_id in active_scans:
-        scanner = active_scans[scan_id]
+        tools = active_scans[scan_id].get_tools_status()
     else:
-        # Create scanner from database/filesystem to read status
+        # Load from SQLite cache for finished/non-active scans
         conn = get_db_connection()
         cursor = conn.cursor()
-        scan = cursor.execute('SELECT * FROM scans WHERE id = ?', (scan_id,)).fetchone()
+        scan = cursor.execute('SELECT id FROM scans WHERE id = ?', (scan_id,)).fetchone()
         conn.close()
-        
+
         if not scan:
             return jsonify({'error': 'Scan not found'}), 404
-        
-        # Load settings
-        settings = load_settings()
-        rotate_ua = settings.get('rotate_user_agents', False)
-        
-        scanner = DomScoutScanner(
-            scan_id,
-            scan['domain'],
-            scan['rate_limit'] or 150,
-            RESOLVERS_FILE,
-            SCREENSHOTS_DIR,
-            rotate_ua
-        )
-        
-        # Load counts from filesystem
-        scan_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), f'scan_{scan_id}')
-        if os.path.exists(scan_dir):
-            for tool_name in scanner.tools_status.keys():
-                file_map = {
-                    'subfinder': 'subfinder-rescursive.txt',
-                    'findomain': 'findomain.txt',
-                    'assetfinder': 'assetfinder.txt',
-                    'sublist3r': 'sublist3r.txt',
-                    'merge': 'subdomains.txt',
-                    'dnsx': 'live_subs.txt',
-                    'httpx': 'alive_webservices.txt',
-                    'gau': 'gau_urls.txt',
-                    'gospider': 'gospider_urls.txt',
-                    'merge2': 'all_urls_merged.txt',
-                    'gowitness': 'gowitness.sqlite3'
-                }
-                
-                filename = file_map.get(tool_name)
-                if filename:
-                    filepath = os.path.join(scan_dir, filename)
-                    if os.path.exists(filepath):
-                        scanner.tools_status[tool_name]['status'] = 'completed'
-                        
-                        # Count lines for text files
-                        if filename.endswith('.txt'):
-                            try:
-                                with open(filepath, 'r') as f:
-                                    count = sum(1 for line in f if line.strip())
-                                    scanner.tools_status[tool_name]['count'] = count
-                            except:
-                                pass
-                        elif tool_name == 'gowitness':
-                            # Check screenshots from database
-                            conn = get_db_connection()
-                            cursor = conn.cursor()
-                            count = cursor.execute(
-                                'SELECT COUNT(*) FROM screenshots WHERE scan_id = ?',
-                                (scan_id,)
-                            ).fetchone()[0]
-                            scanner.tools_status[tool_name]['count'] = count
-                            conn.close()
-    
-    tools = scanner.get_tools_status()
+
+        tools = load_tool_status_from_db(scan_id)
+
     return jsonify({'tools': tools})
 
 
@@ -550,10 +776,17 @@ def run_tool_async(scanner, tool_name):
     """Run a single tool asynchronously"""
     try:
         scanner.run_single_tool(tool_name)
+
+        if scanner.scan_id in deleted_scans:
+            return
         
         # Save results to database after tool completion
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        if not scan_exists(conn, scanner.scan_id):
+            conn.close()
+            return
         
         if tool_name == 'merge':
             # Save subdomains after merge
@@ -581,8 +814,19 @@ def run_tool_async(scanner, tool_name):
             cursor.execute('DELETE FROM urls WHERE scan_id = ?', (scanner.scan_id,))
             for url_data in scanner.urls:
                 cursor.execute(
-                    'INSERT INTO urls (scan_id, url, status_code) VALUES (?, ?, ?)',
-                    (scanner.scan_id, url_data['url'], url_data.get('status_code'))
+                    '''
+                    INSERT INTO urls (scan_id, url, status_code, title, webserver, technologies, content_length)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        scanner.scan_id,
+                        url_data['url'],
+                        url_data.get('status_code'),
+                        url_data.get('title'),
+                        url_data.get('webserver'),
+                        serialize_technologies(url_data.get('technologies')),
+                        url_data.get('content_length')
+                    )
                 )
         
         elif tool_name == 'merge2':
@@ -597,8 +841,11 @@ def run_tool_async(scanner, tool_name):
                         url = line.strip()
                         if url:
                             cursor.execute(
-                                'INSERT INTO urls (scan_id, url, status_code) VALUES (?, ?, ?)',
-                                (scanner.scan_id, url, None)
+                                '''
+                                INSERT INTO urls (scan_id, url, status_code, title, webserver, technologies, content_length)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                ''',
+                                (scanner.scan_id, url, None, None, None, None, None)
                             )
         
         elif tool_name == 'gowitness':
@@ -612,23 +859,52 @@ def run_tool_async(scanner, tool_name):
                      screenshot.get('status_code'), screenshot.get('title'), 
                      json.dumps(screenshot.get('headers', {})), screenshot.get('roi_score', 50))
                 )
+
+        # Persist current status/results cache for this tool
+        tool_data = scanner.get_tools_status().get(tool_name, {'status': 'idle', 'count': 0})
+        upsert_tool_status(
+            conn,
+            scanner.scan_id,
+            tool_name,
+            tool_data.get('status', 'idle'),
+            tool_data.get('count', 0)
+        )
+        upsert_tool_results(
+            conn,
+            scanner.scan_id,
+            tool_name,
+            scanner.get_tool_results(tool_name)
+        )
         
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"Tool {tool_name} failed: {e}")
+        try:
+            conn = get_db_connection()
+            tool_data = scanner.get_tools_status().get(tool_name, {'status': 'failed', 'count': 0})
+            upsert_tool_status(
+                conn,
+                scanner.scan_id,
+                tool_name,
+                tool_data.get('status', 'failed'),
+                tool_data.get('count', 0)
+            )
+            upsert_tool_results(conn, scanner.scan_id, tool_name, [])
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route('/api/scan/<scan_id>/tool/<tool_name>/results', methods=['GET'])
 def get_tool_results(scan_id, tool_name):
     """Get results from a specific tool"""
-    scanner = None
-    
     # Try to get scanner from active scans
     if scan_id in active_scans:
-        scanner = active_scans[scan_id]
+        results = active_scans[scan_id].get_tool_results(tool_name)
     else:
-        # Create scanner from database/filesystem
+        # Read from SQLite cache for finished/non-active scans
         conn = get_db_connection()
         cursor = conn.cursor()
         scan = cursor.execute('SELECT * FROM scans WHERE id = ?', (scan_id,)).fetchone()
@@ -636,22 +912,9 @@ def get_tool_results(scan_id, tool_name):
         
         if not scan:
             return jsonify({'error': 'Scan not found'}), 404
-        
-        # Load settings
-        settings = load_settings()
-        rotate_ua = settings.get('rotate_user_agents', False)
-        
-        # Create scanner instance to read results from filesystem
-        scanner = DomScoutScanner(
-            scan_id,
-            scan['domain'],
-            scan['rate_limit'] or 150,
-            RESOLVERS_FILE,
-            SCREENSHOTS_DIR,
-            rotate_ua
-        )
-    
-    results = scanner.get_tool_results(tool_name)
+
+        results = load_tool_results_from_db(scan_id, tool_name)
+
     return jsonify({'results': results, 'tool': tool_name})
 
 
@@ -659,6 +922,8 @@ def get_tool_results(scan_id, tool_name):
 def delete_scan(scan_id):
     """Delete a scan and all its data"""
     try:
+        deleted_scans.add(scan_id)
+
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -666,6 +931,8 @@ def delete_scan(scan_id):
         cursor.execute('DELETE FROM screenshots WHERE scan_id = ?', (scan_id,))
         cursor.execute('DELETE FROM urls WHERE scan_id = ?', (scan_id,))
         cursor.execute('DELETE FROM subdomains WHERE scan_id = ?', (scan_id,))
+        cursor.execute('DELETE FROM tool_results WHERE scan_id = ?', (scan_id,))
+        cursor.execute('DELETE FROM tool_status WHERE scan_id = ?', (scan_id,))
         cursor.execute('DELETE FROM scans WHERE id = ?', (scan_id,))
         
         conn.commit()
@@ -676,7 +943,7 @@ def delete_scan(scan_id):
             del active_scans[scan_id]
         
         # Delete scan directory
-        scan_dir = os.path.join(os.path.dirname(SCREENSHOTS_DIR), f'scan_{scan_id}')
+        scan_dir = os.path.join(TEMP_SCANS_DIR, f'scan_{scan_id}')
         if os.path.exists(scan_dir):
             shutil.rmtree(scan_dir)
         
@@ -684,7 +951,7 @@ def delete_scan(scan_id):
         scan_screenshots = os.path.join(SCREENSHOTS_DIR, scan_id)
         if os.path.exists(scan_screenshots):
             shutil.rmtree(scan_screenshots)
-        
+
         return jsonify({'success': True, 'message': 'Scan deleted'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -805,6 +1072,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"Database: {DB_PATH}")
     print(f"Screenshots: {SCREENSHOTS_DIR}")
+    print(f"Temporary scans: {TEMP_SCANS_DIR}")
     print(f"Resolvers: {RESOLVERS_FILE}")
     print("=" * 60)
     print("Server running at http://localhost:5000")

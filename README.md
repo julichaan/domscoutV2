@@ -31,6 +31,7 @@ Before running DomScout v2, ensure you have the following installed:
 
 - **Python 3.8+**: [Download Python](https://www.python.org/)
 - **Node.js 16+**: [Download Node.js](https://nodejs.org/)
+- **GNU Make**: usually preinstalled on Linux/macOS
 - **Google Chrome**: Required for screenshots
 
 ### Required Tools
@@ -42,17 +43,23 @@ The following command-line tools must be installed and available in your PATH:
 -   [Assetfinder](https://github.com/tomnomnom/assetfinder) - Asset discovery
 -   [Sublist3r](https://github.com/aboul3la/Sublist3r) - Subdomain enumeration
 -   [DNSx](https://github.com/projectdiscovery/dnsx) - DNS resolution
--   [httpx](https://github.com/projectdiscovery/httpx) - HTTP probe
+-   [httpx](https://github.com/projectdiscovery/httpx) - HTTP probe (`httpx` / `httpx-toolkit` binary)
 -   [gowitness](https://github.com/sensepost/gowitness) - Screenshot capture
 -   `curl` - HTTP requests
 -   `jq` - JSON processor
 
 ### Automated Installation
 
-You can use the original `install.py` script to install all required tools:
+You can use the installer script directly:
 
 ```bash
 python3 install.py
+```
+
+Or via Makefile:
+
+```bash
+make install-tools
 ```
 
 ## 🚀 Installation
@@ -60,21 +67,23 @@ python3 install.py
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/julichaan/domscout.git
-cd domscout
+git clone https://github.com/julichaan/domscoutV2.git
+cd domscoutV2
 ```
 
-### 2. Run Setup
+### 2. Run Setup (Recommended)
+
+Use the Makefile:
 
 ```bash
-chmod +x setup.sh
-./setup.sh
+make setup
 ```
 
 This will:
-- Install Node.js dependencies
-- Build the Vue.js frontend
-- Install Python dependencies
+- Create virtual environment (`venv`)
+- Install backend Python dependencies
+- Install frontend dependencies
+- Build Vue frontend into `server/static`
 
 ### 3. Configure Subfinder (Recommended)
 
@@ -93,9 +102,10 @@ See the [Subfinder documentation](https://github.com/projectdiscovery/subfinder#
 
 ### Start the Application
 
+Recommended:
+
 ```bash
-chmod +x start.sh
-./start.sh
+make start
 ```
 
 The application will be available at **http://localhost:5000**
@@ -116,17 +126,32 @@ The application will be available at **http://localhost:5000**
 For development with hot-reload:
 
 ```bash
-chmod +x dev.sh
-./dev.sh
+make dev
 ```
 
 - Backend: http://localhost:5000
 - Frontend: http://localhost:8080
 
+### Makefile Commands
+
+```bash
+make help           # List all targets
+make install        # Tools + setup
+make install-tools  # External recon tools
+make setup          # App dependencies + build
+make build          # Frontend build only
+make start          # Start Flask (production style)
+make dev            # Backend + Vue dev server
+make status         # Quick environment/tool check
+make clean          # Remove Python caches
+make clean-db       # Remove SQLite database
+make reset          # Full local cleanup
+```
+
 ## 📁 Project Structure
 
 ```
-domscout/
+domscoutV2/
 ├── client/                 # Vue.js frontend
 │   ├── src/
 │   │   ├── views/         # Page components
@@ -148,12 +173,10 @@ domscout/
 │
 ├── scanner.py            # Core scanning logic
 ├── domscout.py          # Original CLI tool (legacy)
+├── Makefile             # Unified project management commands
 ├── install.py           # Tool installation script
 ├── resolvers.txt        # DNS resolvers list
 ├── screenshots/         # Screenshot storage
-├── setup.sh            # Initial setup script
-├── start.sh            # Production start script
-├── dev.sh              # Development start script
 └── README.md           # This file
 ```
 
@@ -185,21 +208,27 @@ DomScout v2 follows the design principles of the [ars0n-framework-v2](https://gi
 3. **DNS Resolution**: Uses dnsx with custom resolvers to find live subdomains
 4. **HTTP Probing**: httpx verifies which subdomains have active web services
 5. **Screenshot Capture**: gowitness captures screenshots and metadata
-6. **Database Storage**: All results stored in SQLite for easy querying
-7. **Web Display**: Vue.js frontend displays results in an intuitive interface
+6. **Temporary Workspace**: scan artifacts are generated in temporary directories during execution
+7. **Database Storage**: final results are persisted in SQLite for querying/history
+8. **Cleanup**: temporary scan artifacts are deleted after completion
+9. **Web Display**: Vue.js frontend displays results in an intuitive interface
 
 ## 🛠️ Troubleshooting
 
 ### Frontend doesn't load
  
-Make sure you've run `./setup.sh` to build the frontend.
+Build frontend assets first:
+
+```bash
+make build
+```
 
 ### Scan fails immediately
 
 Check that all required tools are installed:
 
 ```bash
-which subfinder findomain assetfinder sublist3r dnsx httpx gowitness curl jq
+which subfinder findomain assetfinder sublist3r dnsx httpx httpx-toolkit gowitness curl jq
 ```
 
 ### No subdomains found
