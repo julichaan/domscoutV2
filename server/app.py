@@ -736,10 +736,9 @@ def get_tools_status(scan_id):
 @app.route('/api/scan/<scan_id>/tool/<tool_name>', methods=['POST'])
 def run_individual_tool(scan_id, tool_name):
     """Run an individual tool"""
-    if scan_id not in active_scans:
-        return jsonify({'error': 'Scan not found'}), 404
-    
-    scanner = active_scans[scan_id]
+    scanner, err = _get_or_recreate_scanner(scan_id)
+    if err is not None:
+        return err
     
     # Start tool in background thread
     thread = threading.Thread(target=run_tool_async, args=(scanner, tool_name))
@@ -749,13 +748,86 @@ def run_individual_tool(scan_id, tool_name):
     return jsonify({'success': True, 'tool': tool_name, 'status': 'started'})
 
 
+def _reset_scan_data(conn, scan_id):
+    """Clear all previous scan results from the database for a rescan.
+
+    Note: does not commit; the caller is responsible for committing the connection.
+    """
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM screenshots WHERE scan_id = ?', (scan_id,))
+    cursor.execute('DELETE FROM urls WHERE scan_id = ?', (scan_id,))
+    cursor.execute('DELETE FROM subdomains WHERE scan_id = ?', (scan_id,))
+    cursor.execute('DELETE FROM tool_results WHERE scan_id = ?', (scan_id,))
+    cursor.execute('DELETE FROM tool_status WHERE scan_id = ?', (scan_id,))
+
+
+def _get_or_recreate_scanner(scan_id):
+    """Return the active scanner for scan_id, recreating it from the DB if needed.
+
+    Returns (scanner, error_response) where exactly one of them is None.
+    """
+    if scan_id in active_scans:
+        return active_scans[scan_id], None
+
+    # Scan not active – look it up in the DB and recreate the scanner for rescan
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    scan = cursor.execute('SELECT * FROM scans WHERE id = ?', (scan_id,)).fetchone()
+
+    if not scan:
+        conn.close()
+        return None, (jsonify({'error': 'Scan not found'}), 404)
+
+    domain = scan['domain']
+    rate_limit = scan['rate_limit'] or 150
+
+    # Clear previous results so the new run starts fresh
+    _reset_scan_data(conn, scan_id)
+    cursor.execute(
+        'UPDATE scans SET status = ?, completed_at = NULL, duration = NULL WHERE id = ?',
+        ('created', scan_id)
+    )
+    conn.commit()
+    conn.close()
+
+    # Clean up any leftover temp scan directory
+    try:
+        scan_dir = os.path.join(TEMP_SCANS_DIR, f'scan_{scan_id}')
+        if os.path.exists(scan_dir):
+            shutil.rmtree(scan_dir)
+    except Exception as e:
+        print(f"Warning: could not remove temp scan dir: {e}")
+
+    # Also remove stale screenshots for this scan
+    try:
+        scan_screenshots = os.path.join(SCREENSHOTS_DIR, scan_id)
+        if os.path.exists(scan_screenshots):
+            shutil.rmtree(scan_screenshots)
+    except Exception as e:
+        print(f"Warning: could not remove stale screenshots dir: {e}")
+
+    settings = load_settings()
+    rotate_ua = settings.get('rotate_user_agents', False)
+
+    scanner = DomScoutScanner(
+        scan_id,
+        domain,
+        rate_limit,
+        RESOLVERS_FILE,
+        SCREENSHOTS_DIR,
+        rotate_ua,
+        TEMP_SCANS_DIR
+    )
+    active_scans[scan_id] = scanner
+    return scanner, None
+
+
 @app.route('/api/scan/<scan_id>/auto', methods=['POST'])
 def run_auto_scan(scan_id):
     """Run all tools automatically in sequence"""
-    if scan_id not in active_scans:
-        return jsonify({'error': 'Scan not found'}), 404
-    
-    scanner = active_scans[scan_id]
+    scanner, err = _get_or_recreate_scanner(scan_id)
+    if err is not None:
+        return err
     
     # Update scan status
     conn = get_db_connection()
